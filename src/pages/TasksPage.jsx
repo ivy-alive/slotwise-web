@@ -5,10 +5,8 @@ import {
   removeDependency,
   getDependencies,
   getTasks,
-  createStudyTask,
-  createWorkoutTask,
-  updateStudyTask,
-  updateWorkoutTask,
+  createTask,
+  updateTask,
   deleteTask,
 } from '../api/tasks'
 import { Button } from '@/components/ui/button'
@@ -43,36 +41,37 @@ const DAY_LABELS = {
   SATURDAY: 'Sat',
   SUNDAY: 'Sun',
 }
-const PRIORITY_COLORS = {
-  HIGH: 'destructive',
-  MEDIUM: 'default',
-  LOW: 'secondary',
+const PRIORITY_COLORS = { HIGH: 'destructive', LOW: 'secondary' }
+const PRIORITY_LABELS = { HIGH: 'Must', LOW: 'Normal' }
+
+const getThisWeekRange = () => {
+  const now = new Date()
+  const day = now.getDay()
+  const start = new Date(now)
+  start.setDate(now.getDate() - (day === 0 ? 6 : day - 1))
+  start.setHours(0, 0, 0, 0)
+  const end = new Date(start)
+  end.setDate(start.getDate() + 6)
+  return { start, end }
 }
-const PRIORITY_LABELS = { HIGH: 'Important', MEDIUM: 'Normal', LOW: 'Whenever' }
 
 const getVisibleDoneSessions = (task) => {
   if (!task.doneSessions || task.doneSessions.length === 0) return []
-  if (task.cycleType === 'NONE' || !task.cycleType) return task.doneSessions
-
-  const now = new Date()
-  let start, end
-
-  if (task.cycleType === 'WEEKLY') {
-    const day = now.getDay()
-    start = new Date(now)
-    start.setDate(now.getDate() - (day === 0 ? 6 : day - 1))
-    start.setHours(0, 0, 0, 0)
-    end = new Date(start)
-    end.setDate(start.getDate() + 6)
-  } else {
-    start = new Date(now.getFullYear(), now.getMonth(), 1)
-    end = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+  if (task.type === 'RECURRING' && task.cycleType) {
+    const now = new Date()
+    let start, end
+    if (task.cycleType === 'WEEKLY') {
+      ;({ start, end } = getThisWeekRange())
+    } else {
+      start = new Date(now.getFullYear(), now.getMonth(), 1)
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+    }
+    return task.doneSessions.filter((s) => {
+      const d = new Date(s.date)
+      return d >= start && d <= end
+    })
   }
-
-  return task.doneSessions.filter((s) => {
-    const d = new Date(s.date)
-    return d >= start && d <= end
-  })
+  return task.doneSessions
 }
 
 const parseMinutes = (input) => {
@@ -122,28 +121,246 @@ function MinutesInput({ value, onChange }) {
   )
 }
 
+const emptyOneTimeForm = () => ({
+  title: '',
+  priority: 'LOW',
+  totalMinutes: '',
+  splittable: true,
+  ddl: '',
+  dependsOnIds: [],
+})
+
+const emptyRecurringForm = () => ({
+  title: '',
+  priority: 'LOW',
+  totalMinutes: '',
+  splittable: false,
+  cycleType: 'WEEKLY',
+  cycleCount: '',
+  preferredDays: [],
+  dependsOnIds: [],
+})
+
+function DayPicker({ selected, onChange }) {
+  const toggle = (day) =>
+    onChange(
+      selected.includes(day)
+        ? selected.filter((d) => d !== day)
+        : [...selected, day],
+    )
+  return (
+    <div className="flex gap-2 flex-wrap">
+      {DAYS.map((day) => (
+        <Button
+          key={day}
+          size="sm"
+          variant={selected.includes(day) ? 'default' : 'outline'}
+          onClick={() => toggle(day)}
+          type="button"
+        >
+          {DAY_LABELS[day]}
+        </Button>
+      ))}
+    </div>
+  )
+}
+
+function TaskForm({ form, setForm, allTasks, onSubmit, submitLabel }) {
+  const otherTasks = allTasks.filter(
+    (t) => t.id !== form._editId && !form.dependsOnIds?.includes(t.id),
+  )
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <Label>
+            Title <span className="text-red-500">*</span>
+          </Label>
+          <Input
+            value={form.title}
+            onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label>
+            Duration <span className="text-red-500">*</span>
+          </Label>
+          <MinutesInput
+            value={form.totalMinutes}
+            onChange={(v) => setForm((p) => ({ ...p, totalMinutes: v }))}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label>Priority</Label>
+          <Select
+            value={form.priority}
+            onValueChange={(v) => setForm((p) => ({ ...p, priority: v }))}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="HIGH">Must</SelectItem>
+              <SelectItem value="LOW">Normal</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <Label>Splittable</Label>
+          <Select
+            value={String(form.splittable)}
+            onValueChange={(v) =>
+              setForm((p) => ({ ...p, splittable: v === 'true' }))
+            }
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="true">Yes — can split across days</SelectItem>
+              <SelectItem value="false">No — must fit in one block</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* ONE_TIME only: DDL */}
+        {form.type === 'ONE_TIME' && (
+          <div className="space-y-1">
+            <Label>
+              Deadline{' '}
+              <span className="text-slate-400 text-xs">(optional)</span>
+            </Label>
+            <Input
+              type="date"
+              value={form.ddl || ''}
+              onChange={(e) =>
+                setForm((p) => ({ ...p, ddl: e.target.value || null }))
+              }
+            />
+          </div>
+        )}
+
+        {/* RECURRING only */}
+        {form.type === 'RECURRING' && (
+          <>
+            <div className="space-y-1">
+              <Label>Cycle</Label>
+              <Select
+                value={form.cycleType}
+                onValueChange={(v) => setForm((p) => ({ ...p, cycleType: v }))}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="WEEKLY">Weekly</SelectItem>
+                  <SelectItem value="MONTHLY">Monthly</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label>
+                Times per cycle <span className="text-red-500">*</span>
+              </Label>
+              <Input
+                type="number"
+                min="1"
+                value={form.cycleCount}
+                onChange={(e) =>
+                  setForm((p) => ({ ...p, cycleCount: e.target.value }))
+                }
+              />
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* RECURRING preferred days */}
+      {form.type === 'RECURRING' && (
+        <div className="space-y-1">
+          <Label>
+            Preferred Days{' '}
+            <span className="text-slate-400 text-xs">(optional)</span>
+          </Label>
+          <DayPicker
+            selected={form.preferredDays || []}
+            onChange={(days) => setForm((p) => ({ ...p, preferredDays: days }))}
+          />
+        </div>
+      )}
+
+      {/* Dependencies */}
+      <div className="space-y-1">
+        <Label>
+          Depends On <span className="text-slate-400 text-xs">(optional)</span>
+        </Label>
+        <div className="space-y-2">
+          {form.dependsOnIds?.map((depId) => {
+            const dep = allTasks.find((t) => t.id === depId)
+            return dep ? (
+              <div key={depId} className="flex items-center gap-2">
+                <span className="text-sm">{dep.title}</span>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  type="button"
+                  onClick={() =>
+                    setForm((p) => ({
+                      ...p,
+                      dependsOnIds: p.dependsOnIds.filter((id) => id !== depId),
+                    }))
+                  }
+                >
+                  Remove
+                </Button>
+              </div>
+            ) : null
+          })}
+          {otherTasks.length > 0 && (
+            <Select
+              onValueChange={(v) => {
+                const id = Number(v)
+                if (!form.dependsOnIds?.includes(id)) {
+                  setForm((p) => ({
+                    ...p,
+                    dependsOnIds: [...(p.dependsOnIds || []), id],
+                  }))
+                }
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Add dependency..." />
+              </SelectTrigger>
+              <SelectContent>
+                {otherTasks.map((t) => (
+                  <SelectItem key={t.id} value={String(t.id)}>
+                    {t.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+      </div>
+
+      <Button onClick={onSubmit}>{submitLabel}</Button>
+    </div>
+  )
+}
+
 export default function TasksPage() {
   const [tasks, setTasks] = useState([])
-  const [studyForm, setStudyForm] = useState({
-    title: '',
-    priority: 'MEDIUM',
-    totalMinutes: '',
-    cycleType: 'NONE',
-    cycleCount: '',
-    preferredDay: '',
-    preferredTime: '',
-    dueDate: null,
-    dependsOnIds: [],
+  const [oneTimeForm, setOneTimeForm] = useState({
+    ...emptyOneTimeForm(),
+    type: 'ONE_TIME',
   })
-  const [workoutForm, setWorkoutForm] = useState({
-    title: '',
-    priority: 'MEDIUM',
-    durationMinutes: '',
-    scheduledDays: [],
+  const [recurringForm, setRecurringForm] = useState({
+    ...emptyRecurringForm(),
+    type: 'RECURRING',
   })
   const [editingTask, setEditingTask] = useState(null)
-  const [editStudyForm, setEditStudyForm] = useState(null)
-  const [editWorkoutForm, setEditWorkoutForm] = useState(null)
+  const [editForm, setEditForm] = useState(null)
 
   useEffect(() => {
     fetchTasks()
@@ -154,54 +371,94 @@ export default function TasksPage() {
     setTasks(res.data)
   }
 
-  const handleCreateStudy = async () => {
-    if (!studyForm.title) return toast.error('Title is required')
-    if (!studyForm.totalMinutes) return toast.error('Duration is required')
+  const handleCreate = async (form, resetFn) => {
+    if (!form.title) return toast.error('Title is required')
+    if (!form.totalMinutes) return toast.error('Duration is required')
+    if (form.type === 'RECURRING' && !form.cycleCount)
+      return toast.error('Times per cycle is required')
     try {
-      await createStudyTask({
-        ...studyForm,
-        totalMinutes: Number(studyForm.totalMinutes),
-        cycleCount: studyForm.cycleCount ? Number(studyForm.cycleCount) : null,
-        preferredDay: studyForm.preferredDay || null,
-        preferredTime: studyForm.preferredTime || null,
-        dueDate: studyForm.dueDate || null,
-        dependsOnIds: studyForm.dependsOnIds || [],
+      await createTask({
+        ...form,
+        totalMinutes: Number(form.totalMinutes),
+        cycleCount: form.cycleCount ? Number(form.cycleCount) : null,
+        ddl: form.ddl || null,
+        preferredDays: form.preferredDays || [],
+        dependsOnIds: form.dependsOnIds || [],
       })
-      toast.success('Study task created')
-      setStudyForm({
-        title: '',
-        priority: 'MEDIUM',
-        totalMinutes: '',
-        cycleType: 'NONE',
-        cycleCount: '',
-        preferredDay: '',
-        preferredTime: '',
-        dueDate: null,
-        dependsOnIds: [],
-      })
+      toast.success('Task created')
+      resetFn()
       fetchTasks()
     } catch (e) {
       toast.error(e.response?.data?.message || 'Something went wrong')
     }
   }
 
-  const handleCreateWorkout = async () => {
-    if (!workoutForm.title) return toast.error('Title is required')
-    if (!workoutForm.durationMinutes) return toast.error('Duration is required')
-    if (workoutForm.scheduledDays.length === 0)
-      return toast.error('Select at least one day')
+  const handleEdit = async (task) => {
+    const deps = await getDependencies(task.id)
+    setEditForm({
+      _editId: task.id,
+      type: task.type,
+      title: task.title,
+      priority: task.priority,
+      totalMinutes: task.totalMinutes,
+      splittable: task.splittable ?? (task.type === 'RECURRING' ? false : true),
+      ddl: task.ddl || '',
+      cycleType: task.cycleType || 'WEEKLY',
+      cycleCount: task.cycleCount || '',
+      preferredDays: task.preferredDays || [],
+      dependsOnIds: deps.data.map((d) => d.id),
+      _dependencies: deps.data,
+    })
+    setEditingTask(task.id)
+  }
+
+  const handleUpdate = async (id) => {
     try {
-      await createWorkoutTask({
-        ...workoutForm,
-        durationMinutes: Number(workoutForm.durationMinutes),
+      await updateTask(id, {
+        type: editForm.type,
+        title: editForm.title,
+        priority: editForm.priority,
+        totalMinutes: Number(editForm.totalMinutes),
+        splittable: editForm.splittable,
+        ddl: editForm.ddl || null,
+        cycleType: editForm.cycleType || null,
+        cycleCount: editForm.cycleCount ? Number(editForm.cycleCount) : null,
+        preferredDays: editForm.preferredDays || [],
+        dependsOnIds: editForm.dependsOnIds || [],
       })
-      toast.success('Workout task created')
-      setWorkoutForm({
-        title: '',
-        priority: 'MEDIUM',
-        durationMinutes: '',
-        scheduledDays: [],
-      })
+      toast.success('Task updated')
+      setEditingTask(null)
+      setEditForm(null)
+      fetchTasks()
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Something went wrong')
+    }
+  }
+
+  const handleAddDep = async (taskId, dependsOnId) => {
+    try {
+      await addDependency(taskId, dependsOnId)
+      const deps = await getDependencies(taskId)
+      setEditForm((p) => ({
+        ...p,
+        dependsOnIds: deps.data.map((d) => d.id),
+        _dependencies: deps.data,
+      }))
+      fetchTasks()
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Something went wrong')
+    }
+  }
+
+  const handleRemoveDep = async (taskId, dependsOnId) => {
+    try {
+      await removeDependency(taskId, dependsOnId)
+      const deps = await getDependencies(taskId)
+      setEditForm((p) => ({
+        ...p,
+        dependsOnIds: deps.data.map((d) => d.id),
+        _dependencies: deps.data,
+      }))
       fetchTasks()
     } catch (e) {
       toast.error(e.response?.data?.message || 'Something went wrong')
@@ -209,7 +466,7 @@ export default function TasksPage() {
   }
 
   const handleDelete = async (id) => {
-    if (!confirm('Are you sure you want to delete this task?')) return
+    if (!confirm('Delete this task?')) return
     try {
       await deleteTask(id)
       toast.success('Task deleted')
@@ -219,293 +476,178 @@ export default function TasksPage() {
     }
   }
 
-  const toggleDay = (day) => {
-    setWorkoutForm((prev) => ({
-      ...prev,
-      scheduledDays: prev.scheduledDays.includes(day)
-        ? prev.scheduledDays.filter((d) => d !== day)
-        : [...prev.scheduledDays, day],
-    }))
-  }
+  const oneTimeTasks = tasks.filter((t) => t.type === 'ONE_TIME')
+  const recurringTasks = tasks.filter((t) => t.type === 'RECURRING')
 
-  const toggleEditDay = (day) => {
-    setEditWorkoutForm((prev) => ({
-      ...prev,
-      scheduledDays: prev.scheduledDays.includes(day)
-        ? prev.scheduledDays.filter((d) => d !== day)
-        : [...prev.scheduledDays, day],
-    }))
-  }
+  const renderTaskCard = (task) => {
+    const sessions = getVisibleDoneSessions(task)
+    const isEditing = editingTask === task.id
 
-  const studyTasks = tasks.filter((t) => t.type === 'STUDY')
-  const workoutTasks = tasks.filter((t) => t.type === 'WORKOUT')
-
-  const handleEditStudy = async (task) => {
-    const deps = await getDependencies(task.id)
-    setEditStudyForm({
-      title: task.title,
-      priority: task.priority,
-      totalMinutes: task.totalMinutes,
-      cycleType: task.cycleType || 'NONE',
-      cycleCount: task.cycleCount || '',
-      preferredDay: task.preferredDay || '',
-      preferredTime: task.preferredTime?.slice(0, 5) || '',
-      dueDate: task.dueDate || '',
-      dependencies: deps.data,
-    })
-    setEditingTask(task.id)
-  }
-
-  const handleEditWorkout = (task) => {
-    setEditingTask(task.id)
-    setEditWorkoutForm({
-      title: task.title,
-      priority: task.priority,
-      durationMinutes: task.durationMinutes,
-      scheduledDays: task.scheduledDays || [],
-    })
-  }
-
-  const handleUpdateStudy = async (id) => {
-    try {
-      await updateStudyTask(id, {
-        ...editStudyForm,
-        totalMinutes: Number(editStudyForm.totalMinutes),
-        cycleCount: editStudyForm.cycleCount
-          ? Number(editStudyForm.cycleCount)
-          : null,
-        preferredDay: editStudyForm.preferredDay || null,
-        preferredTime: editStudyForm.preferredTime || null,
-        dueDate: editStudyForm.dueDate || null,
-      })
-      toast.success('Task updated')
-      setEditingTask(null)
-      fetchTasks()
-    } catch (e) {
-      toast.error(e.response?.data?.message || 'Something went wrong')
-    }
-  }
-
-  const handleUpdateWorkout = async (id) => {
-    try {
-      await updateWorkoutTask(id, {
-        ...editWorkoutForm,
-        durationMinutes: Number(editWorkoutForm.durationMinutes),
-      })
-      toast.success('Task updated')
-      setEditingTask(null)
-      fetchTasks()
-    } catch (e) {
-      toast.error(e.response?.data?.message || 'Something went wrong')
-    }
-  }
-
-  const handleAddDependency = async (taskId, dependsOnId) => {
-    try {
-      await addDependency(taskId, dependsOnId)
-      toast.success('Dependency added')
-      const deps = await getDependencies(taskId)
-      setEditStudyForm((p) => ({ ...p, dependencies: deps.data }))
-      fetchTasks()
-    } catch (e) {
-      toast.error(e.response?.data?.message || 'Something went wrong')
-    }
-  }
-
-  const handleRemoveDependency = async (taskId, dependsOnId) => {
-    try {
-      await removeDependency(taskId, dependsOnId)
-      toast.success('Dependency removed')
-      const deps = await getDependencies(taskId)
-      setEditStudyForm((p) => ({ ...p, dependencies: deps.data }))
-      fetchTasks()
-    } catch (e) {
-      toast.error(e.response?.data?.message || 'Something went wrong')
-    }
-  }
-
-  return (
-    <div className="space-y-6">
-      <h2 className="text-2xl font-bold">Tasks</h2>
-
-      <Tabs defaultValue="study">
-        <TabsList>
-          <TabsTrigger value="study">Study</TabsTrigger>
-          <TabsTrigger value="workout">Workout</TabsTrigger>
-        </TabsList>
-
-        {/* Study Tasks */}
-        <TabsContent value="study" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>New Study Task</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
+    return (
+      <Card key={task.id}>
+        <CardContent className="py-4">
+          {isEditing && editForm ? (
+            <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <Label>Title <span className="text-red-500">*</span></Label>
+                  <Label>
+                    Title <span className="text-red-500">*</span>
+                  </Label>
                   <Input
-                    value={studyForm.title}
+                    value={editForm.title}
                     onChange={(e) =>
-                      setStudyForm((p) => ({ ...p, title: e.target.value }))
+                      setEditForm((p) => ({ ...p, title: e.target.value }))
                     }
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label>Duration <span className="text-red-500">*</span></Label>
+                  <Label>
+                    Duration <span className="text-red-500">*</span>
+                  </Label>
                   <MinutesInput
-                    value={studyForm.totalMinutes}
+                    value={editForm.totalMinutes}
                     onChange={(v) =>
-                      setStudyForm((p) => ({ ...p, totalMinutes: v }))
+                      setEditForm((p) => ({ ...p, totalMinutes: v }))
                     }
                   />
                 </div>
                 <div className="space-y-1">
                   <Label>Priority</Label>
                   <Select
-                    value={studyForm.priority}
+                    value={editForm.priority}
                     onValueChange={(v) =>
-                      setStudyForm((p) => ({ ...p, priority: v }))
+                      setEditForm((p) => ({ ...p, priority: v }))
                     }
                   >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="HIGH">Important</SelectItem>
-                      <SelectItem value="MEDIUM">Normal</SelectItem>
-                      <SelectItem value="LOW">Whenever</SelectItem>
+                      <SelectItem value="HIGH">Must</SelectItem>
+                      <SelectItem value="LOW">Normal</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1">
-                  <Label>Cycle Type</Label>
+                  <Label>Splittable</Label>
                   <Select
-                    value={studyForm.cycleType}
+                    value={String(editForm.splittable)}
                     onValueChange={(v) =>
-                      setStudyForm((p) => ({ ...p, cycleType: v }))
+                      setEditForm((p) => ({ ...p, splittable: v === 'true' }))
                     }
                   >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="NONE">None</SelectItem>
-                      <SelectItem value="WEEKLY">Weekly</SelectItem>
-                      <SelectItem value="MONTHLY">Monthly</SelectItem>
+                      <SelectItem value="true">
+                        Yes — can split across days
+                      </SelectItem>
+                      <SelectItem value="false">
+                        No — must fit in one block
+                      </SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
-                {studyForm.cycleType !== 'NONE' && (
+                {editForm.type === 'ONE_TIME' && (
                   <div className="space-y-1">
-                    <Label>Cycle Count</Label>
+                    <Label>
+                      Deadline{' '}
+                      <span className="text-slate-400 text-xs">(optional)</span>
+                    </Label>
                     <Input
-                      type="number"
-                      value={studyForm.cycleCount}
+                      type="date"
+                      value={editForm.ddl || ''}
                       onChange={(e) =>
-                        setStudyForm((p) => ({
+                        setEditForm((p) => ({
                           ...p,
-                          cycleCount: e.target.value,
+                          ddl: e.target.value || null,
                         }))
                       }
                     />
                   </div>
                 )}
-                <div className="space-y-1">
-                  <Label>Preferred Day</Label>
-                  <Select
-                    value={studyForm.preferredDay}
-                    onValueChange={(v) =>
-                      setStudyForm((p) => ({ ...p, preferredDay: v }))
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Optional" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {DAYS.map((d) => (
-                        <SelectItem key={d} value={d}>
-                          {DAY_LABELS[d]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1">
-                  <Label>Preferred Time</Label>
-                  <Input
-                    type="time"
-                    value={studyForm.preferredTime}
-                    onChange={(e) =>
-                      setStudyForm((p) => ({
-                        ...p,
-                        preferredTime: e.target.value,
-                      }))
-                    }
-                  />
-                </div>
+                {editForm.type === 'RECURRING' && (
+                  <>
+                    <div className="space-y-1">
+                      <Label>Cycle</Label>
+                      <Select
+                        value={editForm.cycleType}
+                        onValueChange={(v) =>
+                          setEditForm((p) => ({ ...p, cycleType: v }))
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="WEEKLY">Weekly</SelectItem>
+                          <SelectItem value="MONTHLY">Monthly</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label>
+                        Times per cycle <span className="text-red-500">*</span>
+                      </Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        value={editForm.cycleCount}
+                        onChange={(e) =>
+                          setEditForm((p) => ({
+                            ...p,
+                            cycleCount: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+              {editForm.type === 'RECURRING' && (
                 <div className="space-y-1">
                   <Label>
-                    Due Date{' '}
+                    Preferred Days{' '}
                     <span className="text-slate-400 text-xs">(optional)</span>
                   </Label>
-                  <Input
-                    type="date"
-                    value={studyForm.dueDate || ''}
-                    onChange={(e) =>
-                      setStudyForm((p) => ({
-                        ...p,
-                        dueDate: e.target.value || null,
-                      }))
+                  <DayPicker
+                    selected={editForm.preferredDays || []}
+                    onChange={(days) =>
+                      setEditForm((p) => ({ ...p, preferredDays: days }))
                     }
                   />
                 </div>
-              </div>
-              <div className="space-y-1 col-span-2">
-                <Label>
-                  Depends On{' '}
-                  <span className="text-slate-400 text-xs">(optional)</span>
-                </Label>
+              )}
+              <div className="space-y-1">
+                <Label>Depends On</Label>
                 <div className="space-y-2">
-                  {studyForm.dependsOnIds?.map((depId) => {
-                    const depTask = studyTasks.find((t) => t.id === depId)
-                    return depTask ? (
-                      <div key={depId} className="flex items-center gap-2">
-                        <span className="text-sm">{depTask.title}</span>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={() =>
-                            setStudyForm((p) => ({
-                              ...p,
-                              dependsOnIds: p.dependsOnIds.filter(
-                                (id) => id !== depId,
-                              ),
-                            }))
-                          }
-                        >
-                          Remove
-                        </Button>
-                      </div>
-                    ) : null
-                  })}
+                  {editForm._dependencies?.map((dep) => (
+                    <div key={dep.id} className="flex items-center gap-2">
+                      <span className="text-sm">{dep.title}</span>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        type="button"
+                        onClick={() => handleRemoveDep(task.id, dep.id)}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  ))}
                   <Select
-                    onValueChange={(v) => {
-                      const id = Number(v)
-                      if (!studyForm.dependsOnIds.includes(id)) {
-                        setStudyForm((p) => ({
-                          ...p,
-                          dependsOnIds: [...p.dependsOnIds, id],
-                        }))
-                      }
-                    }}
+                    onValueChange={(v) => handleAddDep(task.id, Number(v))}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Add dependency..." />
                     </SelectTrigger>
                     <SelectContent>
-                      {studyTasks
-                        .filter((t) => !studyForm.dependsOnIds.includes(t.id))
+                      {tasks
+                        .filter((t) => t.id !== task.id)
+                        .filter(
+                          (t) =>
+                            !editForm._dependencies?.some((d) => d.id === t.id),
+                        )
                         .map((t) => (
                           <SelectItem key={t.id} value={String(t.id)}>
                             {t.title}
@@ -515,469 +657,151 @@ export default function TasksPage() {
                   </Select>
                 </div>
               </div>
-              <Button onClick={handleCreateStudy}>Create</Button>
-            </CardContent>
-          </Card>
-
-          <div className="space-y-2">
-            {studyTasks.map((task) => (
-              <Card key={task.id}>
-                <CardContent className="py-4">
-                  {editingTask === task.id ? (
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <Label>Title <span className="text-red-500">*</span></Label>
-                          <Input
-                            value={editStudyForm.title}
-                            onChange={(e) =>
-                              setEditStudyForm((p) => ({
-                                ...p,
-                                title: e.target.value,
-                              }))
-                            }
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label>Duration <span className="text-red-500">*</span></Label>
-                          <MinutesInput
-                            value={editStudyForm.totalMinutes}
-                            onChange={(v) =>
-                              setEditStudyForm((p) => ({
-                                ...p,
-                                totalMinutes: v,
-                              }))
-                            }
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label>Priority</Label>
-                          <Select
-                            value={editStudyForm.priority}
-                            onValueChange={(v) =>
-                              setEditStudyForm((p) => ({ ...p, priority: v }))
-                            }
-                          >
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="HIGH">Important</SelectItem>
-                              <SelectItem value="MEDIUM">Normal</SelectItem>
-                              <SelectItem value="LOW">Whenever</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="space-y-1">
-                          <Label>Cycle Type</Label>
-                          <Select
-                            value={editStudyForm.cycleType}
-                            onValueChange={(v) =>
-                              setEditStudyForm((p) => ({ ...p, cycleType: v }))
-                            }
-                          >
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="NONE">None</SelectItem>
-                              <SelectItem value="WEEKLY">Weekly</SelectItem>
-                              <SelectItem value="MONTHLY">Monthly</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        {editStudyForm.cycleType !== 'NONE' && (
-                          <div className="space-y-1">
-                            <Label>Cycle Count</Label>
-                            <Input
-                              type="number"
-                              value={editStudyForm.cycleCount}
-                              onChange={(e) =>
-                                setEditStudyForm((p) => ({
-                                  ...p,
-                                  cycleCount: e.target.value,
-                                }))
-                              }
-                            />
-                          </div>
-                        )}
-                        <div className="space-y-1">
-                          <Label>Preferred Day</Label>
-                          <Select
-                            value={editStudyForm.preferredDay}
-                            onValueChange={(v) =>
-                              setEditStudyForm((p) => ({
-                                ...p,
-                                preferredDay: v,
-                              }))
-                            }
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="Optional" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {DAYS.map((d) => (
-                                <SelectItem key={d} value={d}>
-                                  {DAY_LABELS[d]}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="space-y-1">
-                          <Label>Preferred Time</Label>
-                          <Input
-                            type="time"
-                            value={editStudyForm.preferredTime}
-                            onChange={(e) =>
-                              setEditStudyForm((p) => ({
-                                ...p,
-                                preferredTime: e.target.value,
-                              }))
-                            }
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label>
-                            Due Date{' '}
-                            <span className="text-slate-400 text-xs">
-                              (optional)
-                            </span>
-                          </Label>
-                          <Input
-                            type="date"
-                            value={editStudyForm.dueDate || ''}
-                            onChange={(e) =>
-                              setEditStudyForm((p) => ({
-                                ...p,
-                                dueDate: e.target.value || null,
-                              }))
-                            }
-                          />
-                        </div>
-                        <div className="space-y-1 col-span-2">
-                          <Label>Depends On</Label>
-                          <div className="space-y-2">
-                            {editStudyForm.dependencies?.map((dep) => (
-                              <div
-                                key={dep.id}
-                                className="flex items-center gap-2"
-                              >
-                                <span className="text-sm">{dep.title}</span>
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() =>
-                                    handleRemoveDependency(task.id, dep.id)
-                                  }
-                                >
-                                  Remove
-                                </Button>
-                              </div>
-                            ))}
-                            <Select
-                              onValueChange={(v) =>
-                                handleAddDependency(task.id, Number(v))
-                              }
-                            >
-                              <SelectTrigger>
-                                <SelectValue placeholder="Add dependency..." />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {studyTasks
-                                  .filter((t) => t.id !== task.id)
-                                  .filter(
-                                    (t) =>
-                                      !editStudyForm.dependencies?.some(
-                                        (d) => d.id === t.id,
-                                      ),
-                                  )
-                                  .map((t) => (
-                                    <SelectItem key={t.id} value={String(t.id)}>
-                                      {t.title}
-                                    </SelectItem>
-                                  ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          onClick={() => handleUpdateStudy(task.id)}
-                        >
-                          Save
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setEditingTask(null)}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={() => handleUpdate(task.id)}>
+                  Save
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setEditingTask(null)
+                    setEditForm(null)
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{task.title}</span>
+                  <Badge variant={PRIORITY_COLORS[task.priority]}>
+                    {PRIORITY_LABELS[task.priority]}
+                  </Badge>
+                  {task.completed && <Badge variant="outline">Completed</Badge>}
+                </div>
+                <div className="text-sm text-slate-500">
+                  {task.type === 'ONE_TIME' ? (
+                    task.completed ? (
+                      <span className="text-green-600">
+                        Completed on {task.completedDate}
+                      </span>
+                    ) : (
+                      <>
+                        {task.remainingMinutes} / {task.totalMinutes} min
+                        remaining
+                        {task.ddl && ` · Due ${task.ddl}`}
+                        {!task.splittable && ' · must fit in one block'}
+                      </>
+                    )
                   ) : (
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{task.title}</span>
-                          <Badge variant={PRIORITY_COLORS[task.priority]}>
-                            {PRIORITY_LABELS[task.priority]}
-                          </Badge>
-                          {task.completed && (
-                            <Badge variant="outline">Completed</Badge>
-                          )}
-                        </div>
-                        <div className="text-sm text-slate-500">
-                          {task.completed ? (
-                            <span className="text-green-600">
-                              Completed on {task.completedDate}
-                            </span>
-                          ) : (
-                            <>
-                              Remaining {task.remainingMinutes} /{' '}
-                              {task.totalMinutes} min
-                              {task.cycleType !== 'NONE' &&
-                                ` · ${task.cycleType === 'WEEKLY' ? 'Weekly' : 'Monthly'} ${task.cycleCount}x`}
-                              {task.preferredDay &&
-                                ` · Prefers ${DAY_LABELS[task.preferredDay]}`}
-                              {task.dueDate && ` · Due ${task.dueDate}`}
-                            </>
-                          )}
-                        </div>
-                        {(() => {
-                          const sessions = getVisibleDoneSessions(task)
-                          return sessions.length > 0 ? (
-                            <div className="text-xs text-green-600 space-y-0.5 mt-0.5">
-                              {sessions.map((s, i) => (
-                                <div key={i}>✓ {s.date} — {s.actualMinutes} min</div>
-                              ))}
-                            </div>
-                          ) : null
-                        })()}
-                        {task.dependencies?.length > 0 && (
-                          <div className="text-sm text-slate-400">
-                            Depends on:{' '}
-                            {task.dependencies.map((d) => d.title).join(', ')}
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleEditStudy(task)}
-                        >
-                          Edit
-                        </Button>
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => handleDelete(task.id)}
-                        >
-                          Delete
-                        </Button>
-                      </div>
-                    </div>
+                    <>
+                      {task.totalMinutes} min ·{' '}
+                      {task.cycleType === 'WEEKLY' ? 'Weekly' : 'Monthly'}{' '}
+                      {task.cycleCount}x
+                      {task.preferredDays?.length > 0 &&
+                        ` · ${task.preferredDays.map((d) => DAY_LABELS[d]).join(', ')}`}
+                      {!task.splittable && ' · must fit in one block'}
+                    </>
                   )}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </TabsContent>
+                </div>
+                {sessions.length > 0 && (
+                  <div className="text-xs text-green-600 space-y-0.5 mt-0.5">
+                    {sessions.map((s, i) => (
+                      <div key={i}>
+                        ✓ {s.date} — {s.actualMinutes} min
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {task.dependencies?.length > 0 && (
+                  <div className="text-sm text-slate-400">
+                    Depends on:{' '}
+                    {task.dependencies.map((d) => d.title).join(', ')}
+                  </div>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleEdit(task)}
+                >
+                  Edit
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => handleDelete(task.id)}
+                >
+                  Delete
+                </Button>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    )
+  }
 
-        {/* Workout Tasks */}
-        <TabsContent value="workout" className="space-y-4">
+  return (
+    <div className="space-y-6">
+      <h2 className="text-2xl font-bold">Tasks</h2>
+
+      <Tabs defaultValue="one-time">
+        <TabsList>
+          <TabsTrigger value="one-time">One-time</TabsTrigger>
+          <TabsTrigger value="recurring">Recurring</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="one-time" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>New Workout Task</CardTitle>
+              <CardTitle>New One-time Task</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label>Title <span className="text-red-500">*</span></Label>
-                  <Input
-                    value={workoutForm.title}
-                    onChange={(e) =>
-                      setWorkoutForm((p) => ({ ...p, title: e.target.value }))
-                    }
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label>Duration <span className="text-red-500">*</span></Label>
-                  <MinutesInput
-                    value={workoutForm.durationMinutes}
-                    onChange={(v) =>
-                      setWorkoutForm((p) => ({ ...p, durationMinutes: v }))
-                    }
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label>Priority</Label>
-                  <Select
-                    value={workoutForm.priority}
-                    onValueChange={(v) =>
-                      setWorkoutForm((p) => ({ ...p, priority: v }))
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="HIGH">Important</SelectItem>
-                      <SelectItem value="MEDIUM">Normal</SelectItem>
-                      <SelectItem value="LOW">Whenever</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="space-y-1">
-                <Label>Scheduled Days <span className="text-red-500">*</span></Label>
-                <div className="flex gap-2 flex-wrap">
-                  {DAYS.map((day) => (
-                    <Button
-                      key={day}
-                      size="sm"
-                      variant={
-                        workoutForm.scheduledDays.includes(day)
-                          ? 'default'
-                          : 'outline'
-                      }
-                      onClick={() => toggleDay(day)}
-                    >
-                      {DAY_LABELS[day]}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-              <Button onClick={handleCreateWorkout}>Create</Button>
+            <CardContent>
+              <TaskForm
+                form={oneTimeForm}
+                setForm={setOneTimeForm}
+                allTasks={tasks}
+                onSubmit={() =>
+                  handleCreate(oneTimeForm, () =>
+                    setOneTimeForm({ ...emptyOneTimeForm(), type: 'ONE_TIME' }),
+                  )
+                }
+                submitLabel="Create"
+              />
             </CardContent>
           </Card>
+          <div className="space-y-2">{oneTimeTasks.map(renderTaskCard)}</div>
+        </TabsContent>
 
-          <div className="space-y-2">
-            {workoutTasks.map((task) => (
-              <Card key={task.id}>
-                <CardContent className="py-4">
-                  {editingTask === task.id ? (
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <Label>Title <span className="text-red-500">*</span></Label>
-                          <Input
-                            value={editWorkoutForm.title}
-                            onChange={(e) =>
-                              setEditWorkoutForm((p) => ({
-                                ...p,
-                                title: e.target.value,
-                              }))
-                            }
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label>Duration <span className="text-red-500">*</span></Label>
-                          <MinutesInput
-                            value={editWorkoutForm.durationMinutes}
-                            onChange={(v) =>
-                              setEditWorkoutForm((p) => ({
-                                ...p,
-                                durationMinutes: v,
-                              }))
-                            }
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label>Priority</Label>
-                          <Select
-                            value={editWorkoutForm.priority}
-                            onValueChange={(v) =>
-                              setEditWorkoutForm((p) => ({ ...p, priority: v }))
-                            }
-                          >
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="HIGH">Important</SelectItem>
-                              <SelectItem value="MEDIUM">Normal</SelectItem>
-                              <SelectItem value="LOW">Whenever</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        <Label>Scheduled Days <span className="text-red-500">*</span></Label>
-                        <div className="flex gap-2 flex-wrap">
-                          {DAYS.map((day) => (
-                            <Button
-                              key={day}
-                              size="sm"
-                              variant={
-                                editWorkoutForm.scheduledDays.includes(day)
-                                  ? 'default'
-                                  : 'outline'
-                              }
-                              onClick={() => toggleEditDay(day)}
-                            >
-                              {DAY_LABELS[day]}
-                            </Button>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          onClick={() => handleUpdateWorkout(task.id)}
-                        >
-                          Save
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setEditingTask(null)}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{task.title}</span>
-                          <Badge variant={PRIORITY_COLORS[task.priority]}>
-                            {PRIORITY_LABELS[task.priority]}
-                          </Badge>
-                        </div>
-                        <div className="text-sm text-slate-500">
-                          {task.durationMinutes} min
-                          {task.scheduledDays &&
-                            ` · ${task.scheduledDays.map((d) => DAY_LABELS[d]).join(', ')}`}
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleEditWorkout(task)}
-                        >
-                          Edit
-                        </Button>
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => handleDelete(task.id)}
-                        >
-                          Delete
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+        <TabsContent value="recurring" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>New Recurring Task</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <TaskForm
+                form={recurringForm}
+                setForm={setRecurringForm}
+                allTasks={tasks}
+                onSubmit={() =>
+                  handleCreate(recurringForm, () =>
+                    setRecurringForm({
+                      ...emptyRecurringForm(),
+                      type: 'RECURRING',
+                    }),
+                  )
+                }
+                submitLabel="Create"
+              />
+            </CardContent>
+          </Card>
+          <div className="space-y-2">{recurringTasks.map(renderTaskCard)}</div>
         </TabsContent>
       </Tabs>
     </div>

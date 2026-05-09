@@ -522,12 +522,12 @@ export default function SchedulePage() {
                             <span className="font-medium">{a.taskTitle}</span>
                             <Badge
                               variant={
-                                a.taskType === 'WORKOUT'
+                                a.taskType === 'RECURRING'
                                   ? 'secondary'
                                   : 'default'
                               }
                             >
-                              {a.taskType}
+                              {a.taskType === 'ONE_TIME' ? 'One-time' : 'Recurring'}
                             </Badge>
                           </div>
                           <span className="text-sm text-slate-500">
@@ -592,7 +592,7 @@ export default function SchedulePage() {
                                       ...prev[a.allocationId],
                                       done: false,
                                       newRemaining:
-                                        a.taskType === 'STUDY'
+                                        a.taskType === 'ONE_TIME'
                                           ? Math.max(
                                               (a.plannedMinutes || 0) -
                                                 (prev[a.allocationId]
