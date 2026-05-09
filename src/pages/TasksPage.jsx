@@ -50,6 +50,31 @@ const PRIORITY_COLORS = {
 }
 const PRIORITY_LABELS = { HIGH: 'Important', MEDIUM: 'Normal', LOW: 'Whenever' }
 
+const getVisibleDoneSessions = (task) => {
+  if (!task.doneSessions || task.doneSessions.length === 0) return []
+  if (task.cycleType === 'NONE' || !task.cycleType) return task.doneSessions
+
+  const now = new Date()
+  let start, end
+
+  if (task.cycleType === 'WEEKLY') {
+    const day = now.getDay()
+    start = new Date(now)
+    start.setDate(now.getDate() - (day === 0 ? 6 : day - 1))
+    start.setHours(0, 0, 0, 0)
+    end = new Date(start)
+    end.setDate(start.getDate() + 6)
+  } else {
+    start = new Date(now.getFullYear(), now.getMonth(), 1)
+    end = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+  }
+
+  return task.doneSessions.filter((s) => {
+    const d = new Date(s.date)
+    return d >= start && d <= end
+  })
+}
+
 const parseMinutes = (input) => {
   if (!input) return ''
   const str = String(input).trim().toLowerCase()
@@ -216,7 +241,6 @@ export default function TasksPage() {
   const workoutTasks = tasks.filter((t) => t.type === 'WORKOUT')
 
   const handleEditStudy = async (task) => {
-    setEditingTask(task.id)
     const deps = await getDependencies(task.id)
     setEditStudyForm({
       title: task.title,
@@ -229,6 +253,7 @@ export default function TasksPage() {
       dueDate: task.dueDate || '',
       dependencies: deps.data,
     })
+    setEditingTask(task.id)
   }
 
   const handleEditWorkout = (task) => {
@@ -318,7 +343,7 @@ export default function TasksPage() {
             <CardContent className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <Label>Title</Label>
+                  <Label>Title <span className="text-red-500">*</span></Label>
                   <Input
                     value={studyForm.title}
                     onChange={(e) =>
@@ -327,7 +352,7 @@ export default function TasksPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label>Duration</Label>
+                  <Label>Duration <span className="text-red-500">*</span></Label>
                   <MinutesInput
                     value={studyForm.totalMinutes}
                     onChange={(v) =>
@@ -502,7 +527,7 @@ export default function TasksPage() {
                     <div className="space-y-3">
                       <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-1">
-                          <Label>Title</Label>
+                          <Label>Title <span className="text-red-500">*</span></Label>
                           <Input
                             value={editStudyForm.title}
                             onChange={(e) =>
@@ -514,7 +539,7 @@ export default function TasksPage() {
                           />
                         </div>
                         <div className="space-y-1">
-                          <Label>Duration</Label>
+                          <Label>Duration <span className="text-red-500">*</span></Label>
                           <MinutesInput
                             value={editStudyForm.totalMinutes}
                             onChange={(v) =>
@@ -706,14 +731,32 @@ export default function TasksPage() {
                           )}
                         </div>
                         <div className="text-sm text-slate-500">
-                          Remaining {task.remainingMinutes} /{' '}
-                          {task.totalMinutes} min
-                          {task.cycleType !== 'NONE' &&
-                            ` · ${task.cycleType === 'WEEKLY' ? 'Weekly' : 'Monthly'} ${task.cycleCount}x`}
-                          {task.preferredDay &&
-                            ` · Prefers ${DAY_LABELS[task.preferredDay]}`}
-                          {task.dueDate && ` · Due ${task.dueDate}`}
+                          {task.completed ? (
+                            <span className="text-green-600">
+                              Completed on {task.completedDate}
+                            </span>
+                          ) : (
+                            <>
+                              Remaining {task.remainingMinutes} /{' '}
+                              {task.totalMinutes} min
+                              {task.cycleType !== 'NONE' &&
+                                ` · ${task.cycleType === 'WEEKLY' ? 'Weekly' : 'Monthly'} ${task.cycleCount}x`}
+                              {task.preferredDay &&
+                                ` · Prefers ${DAY_LABELS[task.preferredDay]}`}
+                              {task.dueDate && ` · Due ${task.dueDate}`}
+                            </>
+                          )}
                         </div>
+                        {(() => {
+                          const sessions = getVisibleDoneSessions(task)
+                          return sessions.length > 0 ? (
+                            <div className="text-xs text-green-600 space-y-0.5 mt-0.5">
+                              {sessions.map((s, i) => (
+                                <div key={i}>✓ {s.date} — {s.actualMinutes} min</div>
+                              ))}
+                            </div>
+                          ) : null
+                        })()}
                         {task.dependencies?.length > 0 && (
                           <div className="text-sm text-slate-400">
                             Depends on:{' '}
@@ -754,7 +797,7 @@ export default function TasksPage() {
             <CardContent className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <Label>Title</Label>
+                  <Label>Title <span className="text-red-500">*</span></Label>
                   <Input
                     value={workoutForm.title}
                     onChange={(e) =>
@@ -763,7 +806,7 @@ export default function TasksPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label>Duration</Label>
+                  <Label>Duration <span className="text-red-500">*</span></Label>
                   <MinutesInput
                     value={workoutForm.durationMinutes}
                     onChange={(v) =>
@@ -791,7 +834,7 @@ export default function TasksPage() {
                 </div>
               </div>
               <div className="space-y-1">
-                <Label>Scheduled Days</Label>
+                <Label>Scheduled Days <span className="text-red-500">*</span></Label>
                 <div className="flex gap-2 flex-wrap">
                   {DAYS.map((day) => (
                     <Button
@@ -821,7 +864,7 @@ export default function TasksPage() {
                     <div className="space-y-3">
                       <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-1">
-                          <Label>Title</Label>
+                          <Label>Title <span className="text-red-500">*</span></Label>
                           <Input
                             value={editWorkoutForm.title}
                             onChange={(e) =>
@@ -833,7 +876,7 @@ export default function TasksPage() {
                           />
                         </div>
                         <div className="space-y-1">
-                          <Label>Duration</Label>
+                          <Label>Duration <span className="text-red-500">*</span></Label>
                           <MinutesInput
                             value={editWorkoutForm.durationMinutes}
                             onChange={(v) =>
@@ -864,7 +907,7 @@ export default function TasksPage() {
                         </div>
                       </div>
                       <div className="space-y-1">
-                        <Label>Scheduled Days</Label>
+                        <Label>Scheduled Days <span className="text-red-500">*</span></Label>
                         <div className="flex gap-2 flex-wrap">
                           {DAYS.map((day) => (
                             <Button
