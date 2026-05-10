@@ -10,3 +10,5 @@ export const removeDependency = (taskId, dependsOnId) =>
   client.delete(`/tasks/${taskId}/dependencies/${dependsOnId}`)
 export const getDependencies = (taskId) =>
   client.get(`/tasks/${taskId}/dependencies`)
+export const updateTaskProgress = (id, data) =>
+  client.put(`/tasks/${id}/progress`, data)

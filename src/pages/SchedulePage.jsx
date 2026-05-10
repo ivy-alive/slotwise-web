@@ -49,7 +49,9 @@ export default function SchedulePage() {
   const [editingSlot, setEditingSlot] = useState(null)
   const [scheduleResult, setScheduleResult] = useState(null)
   const [actualInputs, setActualInputs] = useState({})
+  const [logOpen, setLogOpen] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [weekUpdating, setWeekUpdating] = useState(false)
   const [hasEntry, setHasEntry] = useState(false)
   const [countryCode, setCountryCode] = useState('JP')
   const [holidays, setHolidays] = useState([])
@@ -79,7 +81,7 @@ export default function SchedulePage() {
       setExistingSlots(res.data.freeSlots)
       setHasEntry(true)
       try {
-        const schedRes = await schedule(d)
+        const schedRes = await getSchedule(d)
         setScheduleResult(schedRes.data)
       } catch {
         setScheduleResult(null)
@@ -169,6 +171,7 @@ export default function SchedulePage() {
     try {
       const res = await schedule(date)
       setScheduleResult(res.data)
+      loadWeek(weekStart)
     } catch (e) {
       toast.error(e.response?.data?.message || 'Something went wrong')
     } finally {
@@ -176,35 +179,55 @@ export default function SchedulePage() {
     }
   }
 
+  const handleUpdateWeek = async () => {
+    setWeekUpdating(true)
+    try {
+      const days = weekData.filter(({ data }) => data !== null).map(({ date: d }) => d)
+      await Promise.all(days.map((d) => schedule(d)))
+      await loadWeek(weekStart)
+      if (days.includes(date)) {
+        const res = await getSchedule(date)
+        setScheduleResult(res.data)
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Something went wrong')
+    } finally {
+      setWeekUpdating(false)
+    }
+  }
+
+  const openLog = (a) => {
+    setLogOpen(a.allocationId)
+    setActualInputs((prev) => ({
+      ...prev,
+      [a.allocationId]: {
+        done: a.done ?? undefined,
+        actualMinutes: a.actualMinutes || '',
+        newRemaining: '',
+        memo: a.memo || '',
+      },
+    }))
+  }
+
   const handleUpdateActual = async (allocationId) => {
     const input = actualInputs[allocationId]
     if (input?.done === undefined)
-      return toast.error('Please select Done or Not Done')
+      return toast.error('Please select Completed or Not Done')
     if (input?.actualMinutes === undefined || input?.actualMinutes === '')
-      return toast.error('Please enter actual minutes')
+      return toast.error('Please enter time used')
 
     try {
-      const res = await updateAllocation(date, allocationId, {
+      await updateAllocation(date, allocationId, {
         done: input.done,
-        actualMinutes: input.actualMinutes,
-        newRemaining: input.newRemaining ?? null,
+        actualMinutes: Number(input.actualMinutes),
+        newRemaining: input.newRemaining !== '' ? Number(input.newRemaining) : null,
+        memo: input.memo || null,
       })
 
-      if (res.data.shouldReschedule) {
-        await schedule(date)
-        await loadDay(date)
-        toast.success('Logged and rescheduled')
-      } else if (res.data.askReschedule) {
-        const schedRes = await getSchedule(date)
-        setScheduleResult(schedRes.data)
-        toast.success(
-          `Logged — you have ${res.data.minutesFreed} min freed. Click Regenerate to reschedule.`,
-        )
-      } else {
-        toast.success('Logged')
-        await loadDay(date)
-      }
-
+      setLogOpen(null)
+      toast.success('Logged')
+      await loadDay(date)
+      loadWeek(weekStart)
       setActualInputs((prev) => ({ ...prev, [allocationId]: {} }))
     } catch (e) {
       toast.error(e.response?.data?.message || 'Something went wrong')
@@ -384,23 +407,33 @@ export default function SchedulePage() {
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-base">Week Overview</CardTitle>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setWeekStart(addDays(weekStart, -7))}
+                    >
+                      ‹
+                    </Button>
+                    <span className="text-xs text-slate-500 w-28 text-center">
+                      {weekStart.slice(5)} – {addDays(weekStart, 6).slice(5)}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setWeekStart(addDays(weekStart, 7))}
+                    >
+                      ›
+                    </Button>
+                  </div>
                   <Button
                     size="sm"
-                    variant="ghost"
-                    onClick={() => setWeekStart(addDays(weekStart, -7))}
+                    variant="outline"
+                    onClick={handleUpdateWeek}
+                    disabled={weekUpdating}
                   >
-                    ‹
-                  </Button>
-                  <span className="text-xs text-slate-500 w-28 text-center">
-                    {weekStart.slice(5)} – {addDays(weekStart, 6).slice(5)}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setWeekStart(addDays(weekStart, 7))}
-                  >
-                    ›
+                    {weekUpdating ? 'Updating...' : 'Update'}
                   </Button>
                 </div>
               </div>
@@ -502,7 +535,7 @@ export default function SchedulePage() {
                       onClick={handleSchedule}
                       disabled={loading}
                     >
-                      {loading ? 'Regenerating...' : 'Regenerate'}
+                      {loading ? 'Updating...' : 'Update'}
                     </Button>
                   </div>
                 </CardHeader>
@@ -522,13 +555,19 @@ export default function SchedulePage() {
                             <span className="font-medium">{a.taskTitle}</span>
                             <Badge
                               variant={
-                                a.taskType === 'RECURRING'
+                                a.taskType === 'ONE_TIME'
                                   ? 'secondary'
                                   : 'default'
                               }
                             >
                               {a.taskType === 'ONE_TIME' ? 'One-time' : 'Recurring'}
                             </Badge>
+                            {a.ddl && (() => {
+                              const days = Math.ceil((new Date(a.ddl + 'T00:00:00') - new Date(date + 'T00:00:00')) / 86400000)
+                              const label = days < 0 ? `${-days}d overdue` : days === 0 ? 'Due today' : `${days}d left`
+                              const color = days <= 0 ? 'text-red-500' : days <= 3 ? 'text-orange-500' : 'text-slate-400'
+                              return <span className={`text-xs font-medium ${color}`}>{label}</span>
+                            })()}
                           </div>
                           <span className="text-sm text-slate-500">
                             {a.plannedMinutes} min planned
@@ -544,146 +583,113 @@ export default function SchedulePage() {
                           ))}
                         </div>
 
-                        {a.done ? (
-                          <div className="flex items-center gap-2 text-sm text-green-600">
-                            <Badge
-                              variant="outline"
-                              className="border-green-500 text-green-600"
-                            >
-                              Done
-                            </Badge>
-                            {a.actualMinutes != null && (
-                              <span>{a.actualMinutes} min used</span>
+                        {/* Consumed progress + memo when form is closed */}
+                        {logOpen !== a.allocationId && (
+                          <div className="space-y-0.5">
+                            {a.consumedMinutes > 0 && (
+                              <p className="text-xs text-slate-400">
+                                {a.consumedMinutes} / {a.totalMinutes} min consumed
+                              </p>
+                            )}
+                            {a.memo && (
+                              <p className="text-xs text-slate-400 truncate">
+                                {a.memo}
+                              </p>
                             )}
                           </div>
-                        ) : (
-                          <div className="space-y-2">
+                        )}
+
+                        {/* Status button */}
+                        {logOpen !== a.allocationId && (
+                          a.done === true ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-green-500 text-green-600 hover:bg-green-50"
+                              onClick={() => openLog(a)}
+                            >
+                              ✓ Done · {a.actualMinutes} min
+                            </Button>
+                          ) : a.done === false ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-slate-500"
+                              onClick={() => openLog(a)}
+                            >
+                              Not Done · {a.actualMinutes} min
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => openLog(a)}
+                            >
+                              Log
+                            </Button>
+                          )
+                        )}
+
+                        {/* Inline log form */}
+                        {logOpen === a.allocationId && (
+                          <div className="space-y-3 pt-2 border-t mt-1">
                             <div className="flex gap-2">
                               <Button
                                 size="sm"
-                                variant={
-                                  actualInputs[a.allocationId]?.done === true
-                                    ? 'default'
-                                    : 'outline'
-                                }
-                                onClick={() =>
-                                  setActualInputs((prev) => ({
-                                    ...prev,
-                                    [a.allocationId]: {
-                                      ...prev[a.allocationId],
-                                      done: true,
-                                    },
-                                  }))
-                                }
+                                variant={actualInputs[a.allocationId]?.done === true ? 'default' : 'outline'}
+                                onClick={() => setActualInputs((prev) => ({ ...prev, [a.allocationId]: { ...prev[a.allocationId], done: true } }))}
                               >
-                                Done
+                                Completed
                               </Button>
                               <Button
                                 size="sm"
-                                variant={
-                                  actualInputs[a.allocationId]?.done === false
-                                    ? 'default'
-                                    : 'outline'
-                                }
-                                onClick={() =>
-                                  setActualInputs((prev) => ({
-                                    ...prev,
-                                    [a.allocationId]: {
-                                      ...prev[a.allocationId],
-                                      done: false,
-                                      newRemaining:
-                                        a.taskType === 'ONE_TIME'
-                                          ? Math.max(
-                                              (a.plannedMinutes || 0) -
-                                                (prev[a.allocationId]
-                                                  ?.actualMinutes || 0),
-                                              0,
-                                            )
-                                          : null,
-                                    },
-                                  }))
-                                }
+                                variant={actualInputs[a.allocationId]?.done === false ? 'default' : 'outline'}
+                                onClick={() => setActualInputs((prev) => ({ ...prev, [a.allocationId]: { ...prev[a.allocationId], done: false } }))}
                               >
                                 Not Done
                               </Button>
                             </div>
 
-                            {actualInputs[a.allocationId]?.done !==
-                              undefined && (
-                              <div className="space-y-2">
-                                <div className="flex items-center gap-2">
-                                  <Input
-                                    type="number"
-                                    placeholder="Actual minutes"
-                                    className="w-40"
-                                    value={
-                                      actualInputs[a.allocationId]
-                                        ?.actualMinutes ?? ''
-                                    }
-                                    onChange={(e) => {
-                                      const actual = Number(e.target.value)
-                                      setActualInputs((prev) => ({
-                                        ...prev,
-                                        [a.allocationId]: {
-                                          ...prev[a.allocationId],
-                                          actualMinutes: actual,
-                                          newRemaining:
-                                            prev[a.allocationId]?.done === false
-                                              ? Math.max(
-                                                  (a.plannedMinutes || 0) -
-                                                    actual,
-                                                  0,
-                                                )
-                                              : prev[a.allocationId]
-                                                  ?.newRemaining,
-                                        },
-                                      }))
-                                    }}
-                                  />
-                                  <span className="text-sm text-slate-400">
-                                    min used
-                                  </span>
-                                </div>
+                            <div className="flex items-center gap-2">
+                              <Input
+                                type="number"
+                                placeholder="Time used"
+                                className="w-36"
+                                value={actualInputs[a.allocationId]?.actualMinutes ?? ''}
+                                onChange={(e) => setActualInputs((prev) => ({ ...prev, [a.allocationId]: { ...prev[a.allocationId], actualMinutes: e.target.value } }))}
+                              />
+                              <span className="text-sm text-slate-400">min used</span>
+                            </div>
 
-                                {actualInputs[a.allocationId]?.done ===
-                                  false && (
-                                  <div className="flex items-center gap-2">
-                                    <Input
-                                      type="number"
-                                      placeholder="New remaining"
-                                      className="w-40"
-                                      value={
-                                        actualInputs[a.allocationId]
-                                          ?.newRemaining ?? ''
-                                      }
-                                      onChange={(e) =>
-                                        setActualInputs((prev) => ({
-                                          ...prev,
-                                          [a.allocationId]: {
-                                            ...prev[a.allocationId],
-                                            newRemaining: Number(
-                                              e.target.value,
-                                            ),
-                                          },
-                                        }))
-                                      }
-                                    />
-                                    <span className="text-sm text-slate-400">
-                                      min remaining
-                                    </span>
-                                  </div>
-                                )}
-
-                                <Button
-                                  size="sm"
-                                  onClick={() =>
-                                    handleUpdateActual(a.allocationId)
-                                  }
-                                >
-                                  Log
-                                </Button>
+                            {actualInputs[a.allocationId]?.done === false && (
+                              <div className="flex items-center gap-2">
+                                <Input
+                                  type="number"
+                                  placeholder="Time remaining"
+                                  className="w-36"
+                                  value={actualInputs[a.allocationId]?.newRemaining ?? ''}
+                                  onChange={(e) => setActualInputs((prev) => ({ ...prev, [a.allocationId]: { ...prev[a.allocationId], newRemaining: e.target.value } }))}
+                                />
+                                <span className="text-sm text-slate-400">min remaining</span>
                               </div>
                             )}
+
+                            <textarea
+                              placeholder="Memo (optional)"
+                              rows={2}
+                              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
+                              value={actualInputs[a.allocationId]?.memo ?? ''}
+                              onChange={(e) => setActualInputs((prev) => ({ ...prev, [a.allocationId]: { ...prev[a.allocationId], memo: e.target.value } }))}
+                            />
+
+                            <div className="flex gap-2">
+                              <Button size="sm" onClick={() => handleUpdateActual(a.allocationId)}>
+                                Save
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => setLogOpen(null)}>
+                                Cancel
+                              </Button>
+                            </div>
                           </div>
                         )}
                       </div>

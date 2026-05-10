@@ -8,11 +8,11 @@ import {
   createTask,
   updateTask,
   deleteTask,
+  updateTaskProgress,
 } from '../api/tasks'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -45,34 +45,9 @@ const PRIORITY_COLORS = { HIGH: 'destructive', LOW: 'secondary' }
 const PRIORITY_LABELS = { HIGH: 'Must', LOW: 'Normal' }
 const PRIORITY_ORDER = { HIGH: 0, LOW: 1 }
 
-const getThisWeekRange = () => {
-  const now = new Date()
-  const day = now.getDay()
-  const start = new Date(now)
-  start.setDate(now.getDate() - (day === 0 ? 6 : day - 1))
-  start.setHours(0, 0, 0, 0)
-  const end = new Date(start)
-  end.setDate(start.getDate() + 6)
-  return { start, end }
-}
 
-const getVisibleDoneSessions = (task) => {
-  if (!task.doneSessions || task.doneSessions.length === 0) return []
-  if (task.type === 'RECURRING' && task.cycleType) {
-    const now = new Date()
-    let start, end
-    if (task.cycleType === 'WEEKLY') {
-      ;({ start, end } = getThisWeekRange())
-    } else {
-      start = new Date(now.getFullYear(), now.getMonth(), 1)
-      end = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-    }
-    return task.doneSessions.filter((s) => {
-      const d = new Date(s.date)
-      return d >= start && d <= end
-    })
-  }
-  return task.doneSessions
+const getVisibleSessions = (task) => {
+  return task.doneSessions || []
 }
 
 const formatMins = (mins) => {
@@ -394,6 +369,9 @@ export default function TasksPage() {
   const [editingTask, setEditingTask] = useState(null)
   const [editForm, setEditForm] = useState(null)
   const [sort, setSort] = useState({ field: 'name', dir: 'asc' })
+  const [newTaskType, setNewTaskType] = useState('ONE_TIME')
+  const [filterText, setFilterText] = useState('')
+  const [filterType, setFilterType] = useState('ALL')
 
   useEffect(() => {
     fetchTasks()
@@ -435,6 +413,8 @@ export default function TasksPage() {
       priority: task.priority,
       totalMinutes: task.totalMinutes,
       splittable: task.splittable ?? (task.type === 'RECURRING' ? false : true),
+      remainingMinutes: task.remainingMinutes,
+      markCompleted: task.completed || false,
       ddl: task.ddl || '',
       cycleType: task.cycleType || 'WEEKLY',
       cycleCount: task.cycleCount || '',
@@ -459,6 +439,12 @@ export default function TasksPage() {
         preferredDays: editForm.preferredDays || [],
         dependsOnIds: editForm.dependsOnIds || [],
       })
+      if (editForm.type === 'ONE_TIME') {
+        await updateTaskProgress(id, editForm.markCompleted
+          ? { completed: true }
+          : { completed: false, consumedMinutes: Math.max(0, Number(editForm.totalMinutes) - Number(editForm.remainingMinutes || 0)) }
+        )
+      }
       toast.success('Task updated')
       setEditingTask(null)
       setEditForm(null)
@@ -533,11 +519,15 @@ export default function TasksPage() {
       return 0
     })
 
-  const oneTimeTasks = sortTasks(tasks.filter((t) => t.type === 'ONE_TIME'))
-  const recurringTasks = sortTasks(tasks.filter((t) => t.type === 'RECURRING'))
+  const filteredTasks = tasks.filter((t) => {
+    if (filterType !== 'ALL' && t.type !== filterType) return false
+    if (filterText && !t.title.toLowerCase().includes(filterText.toLowerCase())) return false
+    return true
+  })
+  const allSortedTasks = sortTasks(filteredTasks)
 
   const renderTaskCard = (task) => {
-    const sessions = getVisibleDoneSessions(task)
+    const sessions = getVisibleSessions(task)
     const isEditing = editingTask === task.id
 
     return (
@@ -607,22 +597,48 @@ export default function TasksPage() {
                   </Select>
                 </div>
                 {editForm.type === 'ONE_TIME' && (
-                  <div className="space-y-1">
-                    <Label>
-                      Deadline{' '}
-                      <span className="text-slate-400 text-xs">(optional)</span>
-                    </Label>
-                    <Input
-                      type="date"
-                      value={editForm.ddl || ''}
-                      onChange={(e) =>
-                        setEditForm((p) => ({
-                          ...p,
-                          ddl: e.target.value || null,
-                        }))
-                      }
-                    />
-                  </div>
+                  <>
+                    <div className="space-y-1">
+                      <Label>
+                        Deadline{' '}
+                        <span className="text-slate-400 text-xs">(optional)</span>
+                      </Label>
+                      <Input
+                        type="date"
+                        value={editForm.ddl || ''}
+                        onChange={(e) =>
+                          setEditForm((p) => ({
+                            ...p,
+                            ddl: e.target.value || null,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Remaining</Label>
+                      <MinutesInput
+                        value={editForm.markCompleted ? 0 : editForm.remainingMinutes}
+                        onChange={(v) => setEditForm((p) => ({ ...p, remainingMinutes: v }))}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Status</Label>
+                      <Select
+                        value={editForm.markCompleted ? 'completed' : 'active'}
+                        onValueChange={(v) =>
+                          setEditForm((p) => ({ ...p, markCompleted: v === 'completed' }))
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="active">In Progress</SelectItem>
+                          <SelectItem value="completed">Completed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
                 )}
                 {editForm.type === 'RECURRING' && (
                   <>
@@ -765,10 +781,11 @@ export default function TasksPage() {
                   )}
                 </div>
                 {sessions.length > 0 && (
-                  <div className="text-xs text-green-600 space-y-0.5 mt-0.5">
+                  <div className="text-xs space-y-0.5 mt-0.5">
                     {sessions.map((s, i) => (
-                      <div key={i}>
-                        ✓ {s.date} — {s.actualMinutes} min
+                      <div key={i} className={s.done ? 'text-green-600' : 'text-slate-400'}>
+                        {s.done ? '✓' : '·'} {s.date} — {s.actualMinutes} min
+                        {s.memo && <span className="text-slate-500 ml-1">· {s.memo}</span>}
                       </div>
                     ))}
                   </div>
@@ -807,61 +824,84 @@ export default function TasksPage() {
     <div className="space-y-6">
       <h2 className="text-2xl font-bold">Tasks</h2>
 
-      <Tabs defaultValue="one-time">
-        <TabsList>
-          <TabsTrigger value="one-time">One-time</TabsTrigger>
-          <TabsTrigger value="recurring">Recurring</TabsTrigger>
-        </TabsList>
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle>New Task</CardTitle>
+            <div className="flex gap-1">
+              <Button
+                size="sm"
+                variant={newTaskType === 'ONE_TIME' ? 'default' : 'outline'}
+                onClick={() => setNewTaskType('ONE_TIME')}
+              >
+                One-time
+              </Button>
+              <Button
+                size="sm"
+                variant={newTaskType === 'RECURRING' ? 'default' : 'outline'}
+                onClick={() => setNewTaskType('RECURRING')}
+              >
+                Recurring
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {newTaskType === 'ONE_TIME' ? (
+            <TaskForm
+              form={oneTimeForm}
+              setForm={setOneTimeForm}
+              allTasks={tasks}
+              onSubmit={() =>
+                handleCreate(oneTimeForm, () =>
+                  setOneTimeForm({ ...emptyOneTimeForm(), type: 'ONE_TIME' }),
+                )
+              }
+              submitLabel="Create"
+            />
+          ) : (
+            <TaskForm
+              form={recurringForm}
+              setForm={setRecurringForm}
+              allTasks={tasks}
+              onSubmit={() =>
+                handleCreate(recurringForm, () =>
+                  setRecurringForm({ ...emptyRecurringForm(), type: 'RECURRING' }),
+                )
+              }
+              submitLabel="Create"
+            />
+          )}
+        </CardContent>
+      </Card>
 
-        <TabsContent value="one-time" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>New One-time Task</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <TaskForm
-                form={oneTimeForm}
-                setForm={setOneTimeForm}
-                allTasks={tasks}
-                onSubmit={() =>
-                  handleCreate(oneTimeForm, () =>
-                    setOneTimeForm({ ...emptyOneTimeForm(), type: 'ONE_TIME' }),
-                  )
-                }
-                submitLabel="Create"
-              />
-            </CardContent>
-          </Card>
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Input
+            placeholder="Filter by title..."
+            value={filterText}
+            onChange={(e) => setFilterText(e.target.value)}
+            className="h-8 w-48 text-sm"
+          />
+          {['ALL', 'ONE_TIME', 'RECURRING'].map((type) => (
+            <Button
+              key={type}
+              size="sm"
+              variant={filterType === type ? 'default' : 'outline'}
+              onClick={() => setFilterType(type)}
+            >
+              {type === 'ALL' ? 'All' : type === 'ONE_TIME' ? 'One-time' : 'Recurring'}
+            </Button>
+          ))}
+        </div>
+        <div className="flex items-center justify-between">
           <SortBar sort={sort} onSortClick={handleSortClick} />
-          <div className="space-y-2">{oneTimeTasks.map(renderTaskCard)}</div>
-        </TabsContent>
-
-        <TabsContent value="recurring" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>New Recurring Task</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <TaskForm
-                form={recurringForm}
-                setForm={setRecurringForm}
-                allTasks={tasks}
-                onSubmit={() =>
-                  handleCreate(recurringForm, () =>
-                    setRecurringForm({
-                      ...emptyRecurringForm(),
-                      type: 'RECURRING',
-                    }),
-                  )
-                }
-                submitLabel="Create"
-              />
-            </CardContent>
-          </Card>
-          <SortBar sort={sort} onSortClick={handleSortClick} />
-          <div className="space-y-2">{recurringTasks.map(renderTaskCard)}</div>
-        </TabsContent>
-      </Tabs>
+          <Button size="sm" variant="outline" onClick={fetchTasks}>
+            Update
+          </Button>
+        </div>
+      </div>
+      <div className="space-y-2">{allSortedTasks.map(renderTaskCard)}</div>
     </div>
   )
 }
