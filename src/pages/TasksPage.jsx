@@ -75,6 +75,14 @@ const getVisibleDoneSessions = (task) => {
   return task.doneSessions
 }
 
+const formatMins = (mins) => {
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+  if (h === 0) return `${m} min`
+  if (m === 0) return `${h}h`
+  return `${h}h ${m} min`
+}
+
 const parseMinutes = (input) => {
   if (!input) return ''
   const str = String(input).trim().toLowerCase()
@@ -740,15 +748,14 @@ export default function TasksPage() {
                       </span>
                     ) : (
                       <>
-                        {task.remainingMinutes} / {task.totalMinutes} min
-                        remaining
+                        {formatMins(task.remainingMinutes)} / {formatMins(task.totalMinutes)} remaining
                         {task.ddl && ` · Due ${task.ddl}`}
                         {!task.splittable && ' · must fit in one block'}
                       </>
                     )
                   ) : (
                     <>
-                      {task.totalMinutes} min ·{' '}
+                      {formatMins(task.totalMinutes)} ·{' '}
                       {task.cycleType === 'WEEKLY' ? 'Weekly' : 'Monthly'}{' '}
                       {task.cycleCount}x
                       {task.preferredDays?.length > 0 &&
