@@ -43,6 +43,7 @@ const DAY_LABELS = {
 }
 const PRIORITY_COLORS = { HIGH: 'destructive', LOW: 'secondary' }
 const PRIORITY_LABELS = { HIGH: 'Must', LOW: 'Normal' }
+const PRIORITY_ORDER = { HIGH: 0, LOW: 1 }
 
 const getThisWeekRange = () => {
   const now = new Date()
@@ -349,6 +350,29 @@ function TaskForm({ form, setForm, allTasks, onSubmit, submitLabel }) {
   )
 }
 
+function SortBar({ sort, onSortClick }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-sm text-slate-500">Sort by:</span>
+      {[
+        { field: 'name', label: 'Name' },
+        { field: 'priority', label: 'Priority' },
+        { field: 'status', label: 'Status' },
+      ].map(({ field, label }) => (
+        <Button
+          key={field}
+          size="sm"
+          variant={sort.field === field ? 'default' : 'outline'}
+          onClick={() => onSortClick(field)}
+        >
+          {label}
+          {sort.field === field && (sort.dir === 'asc' ? ' ↑' : ' ↓')}
+        </Button>
+      ))}
+    </div>
+  )
+}
+
 export default function TasksPage() {
   const [tasks, setTasks] = useState([])
   const [oneTimeForm, setOneTimeForm] = useState({
@@ -361,6 +385,7 @@ export default function TasksPage() {
   })
   const [editingTask, setEditingTask] = useState(null)
   const [editForm, setEditForm] = useState(null)
+  const [sort, setSort] = useState({ field: 'name', dir: 'asc' })
 
   useEffect(() => {
     fetchTasks()
@@ -476,8 +501,32 @@ export default function TasksPage() {
     }
   }
 
-  const oneTimeTasks = tasks.filter((t) => t.type === 'ONE_TIME')
-  const recurringTasks = tasks.filter((t) => t.type === 'RECURRING')
+  const handleSortClick = (field) =>
+    setSort((prev) =>
+      prev.field === field
+        ? { field, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+        : { field, dir: 'asc' },
+    )
+
+  const sortTasks = (list) =>
+    [...list].sort((a, b) => {
+      const d = sort.dir === 'asc' ? 1 : -1
+      if (sort.field === 'name') return a.title.localeCompare(b.title) * d
+      if (sort.field === 'priority') {
+        const pd = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]
+        return (pd !== 0 ? pd : a.title.localeCompare(b.title)) * d
+      }
+      if (sort.field === 'status') {
+        const sd = (a.completed ? 1 : 0) - (b.completed ? 1 : 0)
+        if (sd !== 0) return sd * d
+        const pd = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]
+        return pd !== 0 ? pd : a.title.localeCompare(b.title)
+      }
+      return 0
+    })
+
+  const oneTimeTasks = sortTasks(tasks.filter((t) => t.type === 'ONE_TIME'))
+  const recurringTasks = sortTasks(tasks.filter((t) => t.type === 'RECURRING'))
 
   const renderTaskCard = (task) => {
     const sessions = getVisibleDoneSessions(task)
@@ -776,6 +825,7 @@ export default function TasksPage() {
               />
             </CardContent>
           </Card>
+          <SortBar sort={sort} onSortClick={handleSortClick} />
           <div className="space-y-2">{oneTimeTasks.map(renderTaskCard)}</div>
         </TabsContent>
 
@@ -801,6 +851,7 @@ export default function TasksPage() {
               />
             </CardContent>
           </Card>
+          <SortBar sort={sort} onSortClick={handleSortClick} />
           <div className="space-y-2">{recurringTasks.map(renderTaskCard)}</div>
         </TabsContent>
       </Tabs>
