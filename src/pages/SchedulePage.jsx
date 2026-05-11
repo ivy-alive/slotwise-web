@@ -3,11 +3,14 @@ import {
   createDayEntry,
   schedule,
   updateAllocation,
+  deleteAllocationLog,
+  reopenDay,
   getDayEntry,
   addFreeSlot,
   updateFreeSlot,
   deleteFreeSlot,
   getSchedule,
+  callItADay,
 } from '../api/dayEntries'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -52,6 +55,7 @@ export default function SchedulePage() {
   const [logOpen, setLogOpen] = useState(null)
   const [loading, setLoading] = useState(false)
   const [weekUpdating, setWeekUpdating] = useState(false)
+  const [callingItADay, setCallingItADay] = useState(false)
   const [hasEntry, setHasEntry] = useState(false)
   const [countryCode, setCountryCode] = useState('JP')
   const [holidays, setHolidays] = useState([])
@@ -68,7 +72,9 @@ export default function SchedulePage() {
     const results = await Promise.all(
       days.map((d) => getSchedule(d).catch(() => null)),
     )
-    setWeekData(days.map((d, i) => ({ date: d, data: results[i]?.data ?? null })))
+    setWeekData(
+      days.map((d, i) => ({ date: d, data: results[i]?.data ?? null })),
+    )
   }
 
   useEffect(() => {
@@ -93,17 +99,6 @@ export default function SchedulePage() {
     }
   }
 
-  const handleDateChange = (e) => {
-    setDate(e.target.value)
-    setNewSlots([{ start: '', end: '' }])
-    setEditingSlot(null)
-    loadDay(e.target.value)
-  }
-
-  const addNewSlot = () =>
-    setNewSlots((prev) => [...prev, { start: '', end: '' }])
-  const removeNewSlot = (i) =>
-    setNewSlots((prev) => prev.filter((_, idx) => idx !== i))
   const updateNewSlot = (i, field, value) => {
     setNewSlots((prev) =>
       prev.map((s, idx) => (idx === i ? { ...s, [field]: value } : s)),
@@ -182,7 +177,9 @@ export default function SchedulePage() {
   const handleUpdateWeek = async () => {
     setWeekUpdating(true)
     try {
-      const days = weekData.filter(({ data }) => data !== null).map(({ date: d }) => d)
+      const days = weekData
+        .filter(({ data }) => data !== null)
+        .map(({ date: d }) => d)
       await Promise.all(days.map((d) => schedule(d)))
       await loadWeek(weekStart)
       if (days.includes(date)) {
@@ -196,17 +193,73 @@ export default function SchedulePage() {
     }
   }
 
+  const handleCallItADay = async () => {
+    const unlogged =
+      scheduleResult?.allocations.filter((a) => a.done !== true) ?? []
+    if (
+      !confirm(
+        `${unlogged.length} unfinished task(s) will be carried over to tomorrow. Continue?`,
+      )
+    )
+      return
+    setCallingItADay(true)
+    try {
+      const res = await callItADay(date)
+      const { nextDate, carryOverCount } = res.data
+      setDate(nextDate)
+      setWeekStart(getMonday(nextDate))
+      setNewSlots([{ start: '', end: '' }])
+      setEditingSlot(null)
+      setLogOpen(null)
+      await loadDay(nextDate)
+      loadWeek(getMonday(nextDate))
+      toast.success(`${carryOverCount} task(s) carried over to ${nextDate}`)
+      if (!res.data.schedule) {
+        toast.info('Add free slots for tomorrow to generate a schedule')
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Something went wrong')
+    } finally {
+      setCallingItADay(false)
+    }
+  }
+
   const openLog = (a) => {
     setLogOpen(a.allocationId)
     setActualInputs((prev) => ({
       ...prev,
       [a.allocationId]: {
         done: a.done ?? undefined,
-        actualMinutes: a.actualMinutes || '',
+        actualMinutes: a.actualMinutes ?? '',
         newRemaining: '',
         memo: a.memo || '',
       },
     }))
+  }
+
+  const handleDeleteLog = async (allocationId) => {
+    if (!confirm('Remove this log? Consumed minutes will be reversed.')) return
+    try {
+      await deleteAllocationLog(date, allocationId)
+      toast.success('Log removed')
+      await loadDay(date)
+      loadWeek(weekStart)
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Something went wrong')
+    }
+  }
+
+  const handleReopenDay = async () => {
+    if (!confirm('Reopen this day? You can then update the schedule again.'))
+      return
+    try {
+      await reopenDay(date)
+      toast.success('Day reopened')
+      await loadDay(date)
+      loadWeek(weekStart)
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Something went wrong')
+    }
   }
 
   const handleUpdateActual = async (allocationId) => {
@@ -220,7 +273,8 @@ export default function SchedulePage() {
       await updateAllocation(date, allocationId, {
         done: input.done,
         actualMinutes: Number(input.actualMinutes),
-        newRemaining: input.newRemaining !== '' ? Number(input.newRemaining) : null,
+        newRemaining:
+          input.newRemaining !== '' ? Number(input.newRemaining) : null,
         memo: input.memo || null,
       })
 
@@ -457,6 +511,9 @@ export default function SchedulePage() {
                       {WEEK_DAYS[i]}
                     </span>
                     <span className="text-xs text-slate-400">{d.slice(5)}</span>
+                    {data?.closed && (
+                      <span className="text-xs text-slate-400 ml-auto">🔒</span>
+                    )}
                     {!data && (
                       <span className="text-xs text-slate-300 ml-auto">
                         no entry
@@ -529,14 +586,30 @@ export default function SchedulePage() {
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <CardTitle>Plan for {date}</CardTitle>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleSchedule}
-                      disabled={loading}
-                    >
-                      {loading ? 'Updating...' : 'Update'}
-                    </Button>
+                    {scheduleResult.closed ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-400 font-medium">
+                          Day closed
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-slate-400 hover:text-slate-600"
+                          onClick={handleReopenDay}
+                        >
+                          Reopen
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleSchedule}
+                        disabled={loading}
+                      >
+                        {loading ? 'Updating...' : 'Update'}
+                      </Button>
+                    )}
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -560,14 +633,37 @@ export default function SchedulePage() {
                                   : 'default'
                               }
                             >
-                              {a.taskType === 'ONE_TIME' ? 'One-time' : 'Recurring'}
+                              {a.taskType === 'ONE_TIME'
+                                ? 'One-time'
+                                : 'Recurring'}
                             </Badge>
-                            {a.ddl && (() => {
-                              const days = Math.ceil((new Date(a.ddl + 'T00:00:00') - new Date(date + 'T00:00:00')) / 86400000)
-                              const label = days < 0 ? `${-days}d overdue` : days === 0 ? 'Due today' : `${days}d left`
-                              const color = days <= 0 ? 'text-red-500' : days <= 3 ? 'text-orange-500' : 'text-slate-400'
-                              return <span className={`text-xs font-medium ${color}`}>{label}</span>
-                            })()}
+                            {a.ddl &&
+                              (() => {
+                                const days = Math.ceil(
+                                  (new Date(a.ddl + 'T00:00:00') -
+                                    new Date(date + 'T00:00:00')) /
+                                    86400000,
+                                )
+                                const label =
+                                  days < 0
+                                    ? `${-days}d overdue`
+                                    : days === 0
+                                      ? 'Due today'
+                                      : `${days}d left`
+                                const color =
+                                  days <= 0
+                                    ? 'text-red-500'
+                                    : days <= 3
+                                      ? 'text-orange-500'
+                                      : 'text-slate-400'
+                                return (
+                                  <span
+                                    className={`text-xs font-medium ${color}`}
+                                  >
+                                    {label}
+                                  </span>
+                                )
+                              })()}
                           </div>
                           <span className="text-sm text-slate-500">
                             {a.plannedMinutes} min planned
@@ -583,43 +679,54 @@ export default function SchedulePage() {
                           ))}
                         </div>
 
-                        {/* Consumed progress + memo when form is closed */}
-                        {logOpen !== a.allocationId && (
-                          <div className="space-y-0.5">
-                            {a.consumedMinutes > 0 && (
-                              <p className="text-xs text-slate-400">
-                                {a.consumedMinutes} / {a.totalMinutes} min consumed
-                              </p>
-                            )}
+                        {/* Carried-over indicator */}
+                        {logOpen !== a.allocationId && a.carriedOver && (
+                          <span className="text-xs text-slate-400 italic">
+                            → Carried over to next day
+                          </span>
+                        )}
+
+                        {/* Logged summary (read-only) */}
+                        {logOpen !== a.allocationId && a.done !== null && (
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              {a.done === true ? (
+                                <span className="text-sm font-medium text-green-600">
+                                  ✓ Done · {a.actualMinutes} min used
+                                </span>
+                              ) : (
+                                <span className="text-sm font-medium text-slate-500">
+                                  Not Done · {a.actualMinutes} min used
+                                </span>
+                              )}
+                              {a.consumedMinutes > 0 && (
+                                <span className="text-xs text-slate-400">
+                                  ({a.consumedMinutes} / {a.totalMinutes} min
+                                  consumed)
+                                </span>
+                              )}
+                            </div>
                             {a.memo && (
-                              <p className="text-xs text-slate-400 truncate">
-                                {a.memo}
-                              </p>
+                              <p className="text-xs text-slate-400">{a.memo}</p>
+                            )}
+                            {!scheduleResult.closed && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="mt-1"
+                                onClick={() => openLog(a)}
+                              >
+                                Edit log
+                              </Button>
                             )}
                           </div>
                         )}
 
-                        {/* Status button */}
-                        {logOpen !== a.allocationId && (
-                          a.done === true ? (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="border-green-500 text-green-600 hover:bg-green-50"
-                              onClick={() => openLog(a)}
-                            >
-                              ✓ Done · {a.actualMinutes} min
-                            </Button>
-                          ) : a.done === false ? (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="text-slate-500"
-                              onClick={() => openLog(a)}
-                            >
-                              Not Done · {a.actualMinutes} min
-                            </Button>
-                          ) : (
+                        {/* Log button (unlogged and not carried over) */}
+                        {logOpen !== a.allocationId &&
+                          a.done === null &&
+                          !a.carriedOver &&
+                          !scheduleResult.closed && (
                             <Button
                               size="sm"
                               variant="outline"
@@ -627,8 +734,7 @@ export default function SchedulePage() {
                             >
                               Log
                             </Button>
-                          )
-                        )}
+                          )}
 
                         {/* Inline log form */}
                         {logOpen === a.allocationId && (
@@ -636,15 +742,39 @@ export default function SchedulePage() {
                             <div className="flex gap-2">
                               <Button
                                 size="sm"
-                                variant={actualInputs[a.allocationId]?.done === true ? 'default' : 'outline'}
-                                onClick={() => setActualInputs((prev) => ({ ...prev, [a.allocationId]: { ...prev[a.allocationId], done: true } }))}
+                                variant={
+                                  actualInputs[a.allocationId]?.done === true
+                                    ? 'default'
+                                    : 'outline'
+                                }
+                                onClick={() =>
+                                  setActualInputs((prev) => ({
+                                    ...prev,
+                                    [a.allocationId]: {
+                                      ...prev[a.allocationId],
+                                      done: true,
+                                    },
+                                  }))
+                                }
                               >
                                 Completed
                               </Button>
                               <Button
                                 size="sm"
-                                variant={actualInputs[a.allocationId]?.done === false ? 'default' : 'outline'}
-                                onClick={() => setActualInputs((prev) => ({ ...prev, [a.allocationId]: { ...prev[a.allocationId], done: false } }))}
+                                variant={
+                                  actualInputs[a.allocationId]?.done === false
+                                    ? 'default'
+                                    : 'outline'
+                                }
+                                onClick={() =>
+                                  setActualInputs((prev) => ({
+                                    ...prev,
+                                    [a.allocationId]: {
+                                      ...prev[a.allocationId],
+                                      done: false,
+                                    },
+                                  }))
+                                }
                               >
                                 Not Done
                               </Button>
@@ -655,10 +785,23 @@ export default function SchedulePage() {
                                 type="number"
                                 placeholder="Time used"
                                 className="w-36"
-                                value={actualInputs[a.allocationId]?.actualMinutes ?? ''}
-                                onChange={(e) => setActualInputs((prev) => ({ ...prev, [a.allocationId]: { ...prev[a.allocationId], actualMinutes: e.target.value } }))}
+                                value={
+                                  actualInputs[a.allocationId]?.actualMinutes ??
+                                  ''
+                                }
+                                onChange={(e) =>
+                                  setActualInputs((prev) => ({
+                                    ...prev,
+                                    [a.allocationId]: {
+                                      ...prev[a.allocationId],
+                                      actualMinutes: e.target.value,
+                                    },
+                                  }))
+                                }
                               />
-                              <span className="text-sm text-slate-400">min used</span>
+                              <span className="text-sm text-slate-400">
+                                min used
+                              </span>
                             </div>
 
                             {actualInputs[a.allocationId]?.done === false && (
@@ -667,10 +810,23 @@ export default function SchedulePage() {
                                   type="number"
                                   placeholder="Time remaining"
                                   className="w-36"
-                                  value={actualInputs[a.allocationId]?.newRemaining ?? ''}
-                                  onChange={(e) => setActualInputs((prev) => ({ ...prev, [a.allocationId]: { ...prev[a.allocationId], newRemaining: e.target.value } }))}
+                                  value={
+                                    actualInputs[a.allocationId]
+                                      ?.newRemaining ?? ''
+                                  }
+                                  onChange={(e) =>
+                                    setActualInputs((prev) => ({
+                                      ...prev,
+                                      [a.allocationId]: {
+                                        ...prev[a.allocationId],
+                                        newRemaining: e.target.value,
+                                      },
+                                    }))
+                                  }
                                 />
-                                <span className="text-sm text-slate-400">min remaining</span>
+                                <span className="text-sm text-slate-400">
+                                  min remaining
+                                </span>
                               </div>
                             )}
 
@@ -679,22 +835,69 @@ export default function SchedulePage() {
                               rows={2}
                               className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
                               value={actualInputs[a.allocationId]?.memo ?? ''}
-                              onChange={(e) => setActualInputs((prev) => ({ ...prev, [a.allocationId]: { ...prev[a.allocationId], memo: e.target.value } }))}
+                              onChange={(e) =>
+                                setActualInputs((prev) => ({
+                                  ...prev,
+                                  [a.allocationId]: {
+                                    ...prev[a.allocationId],
+                                    memo: e.target.value,
+                                  },
+                                }))
+                              }
                             />
 
-                            <div className="flex gap-2">
-                              <Button size="sm" onClick={() => handleUpdateActual(a.allocationId)}>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="sm"
+                                onClick={() =>
+                                  handleUpdateActual(a.allocationId)
+                                }
+                              >
                                 Save
                               </Button>
-                              <Button size="sm" variant="outline" onClick={() => setLogOpen(null)}>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setLogOpen(null)}
+                              >
                                 Cancel
                               </Button>
+                              {a.done !== null && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="ml-auto text-red-400 hover:text-red-600 hover:bg-red-50"
+                                  onClick={() =>
+                                    handleDeleteLog(a.allocationId)
+                                  }
+                                >
+                                  Delete log
+                                </Button>
+                              )}
                             </div>
                           </div>
                         )}
                       </div>
                     ))
                   )}
+                  {!scheduleResult.closed &&
+                    scheduleResult.allocations.some(
+                      (a) => !a.done && !a.carriedOver,
+                    ) && (
+                      <div className="pt-2 border-t">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-slate-400 hover:text-slate-600 w-full"
+                          onClick={handleCallItADay}
+                          disabled={callingItADay}
+                        >
+                          {callingItADay
+                            ? 'Carrying over...'
+                            : `Call it a day · ${scheduleResult.allocations.filter((a) => a.done !== true).length} task(s) unfinished`}
+                        </Button>
+                      </div>
+                    )}
                 </CardContent>
               </Card>
             </>

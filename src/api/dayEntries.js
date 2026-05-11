@@ -12,3 +12,7 @@ export const updateFreeSlot = (date, slotId, data) =>
 export const deleteFreeSlot = (date, slotId) =>
   client.delete(`/day-entries/${date}/free-slots/${slotId}`)
 export const getSchedule = (date) => client.get(`/day-entries/${date}/schedule`)
+export const callItADay = (date) => client.post(`/day-entries/${date}/call-it-a-day`)
+export const deleteAllocationLog = (date, allocationId) =>
+  client.delete(`/day-entries/${date}/allocations/${allocationId}/log`)
+export const reopenDay = (date) => client.post(`/day-entries/${date}/reopen`)

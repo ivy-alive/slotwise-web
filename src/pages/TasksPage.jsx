@@ -45,7 +45,6 @@ const PRIORITY_COLORS = { HIGH: 'destructive', LOW: 'secondary' }
 const PRIORITY_LABELS = { HIGH: 'Must', LOW: 'Normal' }
 const PRIORITY_ORDER = { HIGH: 0, LOW: 1 }
 
-
 const getVisibleSessions = (task) => {
   return task.doneSessions || []
 }
@@ -440,9 +439,18 @@ export default function TasksPage() {
         dependsOnIds: editForm.dependsOnIds || [],
       })
       if (editForm.type === 'ONE_TIME') {
-        await updateTaskProgress(id, editForm.markCompleted
-          ? { completed: true }
-          : { completed: false, consumedMinutes: Math.max(0, Number(editForm.totalMinutes) - Number(editForm.remainingMinutes || 0)) }
+        await updateTaskProgress(
+          id,
+          editForm.markCompleted
+            ? { completed: true }
+            : {
+                completed: false,
+                consumedMinutes: Math.max(
+                  0,
+                  Number(editForm.totalMinutes) -
+                    Number(editForm.remainingMinutes || 0),
+                ),
+              },
         )
       }
       toast.success('Task updated')
@@ -521,7 +529,8 @@ export default function TasksPage() {
 
   const filteredTasks = tasks.filter((t) => {
     if (filterType !== 'ALL' && t.type !== filterType) return false
-    if (filterText && !t.title.toLowerCase().includes(filterText.toLowerCase())) return false
+    if (filterText && !t.title.toLowerCase().includes(filterText.toLowerCase()))
+      return false
     return true
   })
   const allSortedTasks = sortTasks(filteredTasks)
@@ -601,7 +610,9 @@ export default function TasksPage() {
                     <div className="space-y-1">
                       <Label>
                         Deadline{' '}
-                        <span className="text-slate-400 text-xs">(optional)</span>
+                        <span className="text-slate-400 text-xs">
+                          (optional)
+                        </span>
                       </Label>
                       <Input
                         type="date"
@@ -617,8 +628,12 @@ export default function TasksPage() {
                     <div className="space-y-1">
                       <Label>Remaining</Label>
                       <MinutesInput
-                        value={editForm.markCompleted ? 0 : editForm.remainingMinutes}
-                        onChange={(v) => setEditForm((p) => ({ ...p, remainingMinutes: v }))}
+                        value={
+                          editForm.markCompleted ? 0 : editForm.remainingMinutes
+                        }
+                        onChange={(v) =>
+                          setEditForm((p) => ({ ...p, remainingMinutes: v }))
+                        }
                       />
                     </div>
                     <div className="space-y-1">
@@ -626,7 +641,10 @@ export default function TasksPage() {
                       <Select
                         value={editForm.markCompleted ? 'completed' : 'active'}
                         onValueChange={(v) =>
-                          setEditForm((p) => ({ ...p, markCompleted: v === 'completed' }))
+                          setEditForm((p) => ({
+                            ...p,
+                            markCompleted: v === 'completed',
+                          }))
                         }
                       >
                         <SelectTrigger>
@@ -764,7 +782,8 @@ export default function TasksPage() {
                       </span>
                     ) : (
                       <>
-                        {formatMins(task.remainingMinutes)} / {formatMins(task.totalMinutes)} remaining
+                        {formatMins(task.remainingMinutes)} /{' '}
+                        {formatMins(task.totalMinutes)} remaining
                         {task.ddl && ` · Due ${task.ddl}`}
                         {!task.splittable && ' · must fit in one block'}
                       </>
@@ -783,9 +802,16 @@ export default function TasksPage() {
                 {sessions.length > 0 && (
                   <div className="text-xs space-y-0.5 mt-0.5">
                     {sessions.map((s, i) => (
-                      <div key={i} className={s.done ? 'text-green-600' : 'text-slate-400'}>
+                      <div
+                        key={i}
+                        className={s.done ? 'text-green-600' : 'text-slate-400'}
+                      >
                         {s.done ? '✓' : '·'} {s.date} — {s.actualMinutes} min
-                        {s.memo && <span className="text-slate-500 ml-1">· {s.memo}</span>}
+                        {s.memo && (
+                          <span className="text-slate-500 ml-1">
+                            · {s.memo}
+                          </span>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -866,7 +892,10 @@ export default function TasksPage() {
               allTasks={tasks}
               onSubmit={() =>
                 handleCreate(recurringForm, () =>
-                  setRecurringForm({ ...emptyRecurringForm(), type: 'RECURRING' }),
+                  setRecurringForm({
+                    ...emptyRecurringForm(),
+                    type: 'RECURRING',
+                  }),
                 )
               }
               submitLabel="Create"
@@ -890,7 +919,11 @@ export default function TasksPage() {
               variant={filterType === type ? 'default' : 'outline'}
               onClick={() => setFilterType(type)}
             >
-              {type === 'ALL' ? 'All' : type === 'ONE_TIME' ? 'One-time' : 'Recurring'}
+              {type === 'ALL'
+                ? 'All'
+                : type === 'ONE_TIME'
+                  ? 'One-time'
+                  : 'Recurring'}
             </Button>
           ))}
         </div>
