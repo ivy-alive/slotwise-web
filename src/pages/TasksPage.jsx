@@ -75,6 +75,10 @@ const parseMinutes = (input) => {
 function MinutesInput({ value, onChange }) {
   const [raw, setRaw] = useState(value ? String(value) + ' min' : '')
 
+  useEffect(() => {
+    if (value === '' || value == null) setRaw('')
+  }, [value])
+
   const handleBlur = () => {
     const parsed = parseMinutes(raw)
     if (parsed !== '') {
@@ -332,6 +336,64 @@ function TaskForm({ form, setForm, allTasks, onSubmit, submitLabel }) {
   )
 }
 
+function FilterBar({
+  filterType,
+  setFilterType,
+  filterPriority,
+  setFilterPriority,
+  filterStatus,
+  setFilterStatus,
+  filterDdl,
+  setFilterDdl,
+  filterDuration,
+  setFilterDuration,
+  onClear,
+  hasActiveFilters,
+}) {
+  const sel =
+    'h-8 rounded-md border border-input bg-transparent px-2 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring'
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <select className={sel} value={filterType} onChange={(e) => setFilterType(e.target.value)}>
+        <option value="ALL">All types</option>
+        <option value="ONE_TIME">One-time</option>
+        <option value="RECURRING">Recurring</option>
+      </select>
+      <select className={sel} value={filterPriority} onChange={(e) => setFilterPriority(e.target.value)}>
+        <option value="ALL">All priorities</option>
+        <option value="HIGH">Must</option>
+        <option value="LOW">Normal</option>
+      </select>
+      <select className={sel} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+        <option value="ALL">All statuses</option>
+        <option value="ACTIVE">Active</option>
+        <option value="COMPLETED">Completed</option>
+      </select>
+      <select className={sel} value={filterDdl} onChange={(e) => setFilterDdl(e.target.value)}>
+        <option value="ALL">Any deadline</option>
+        <option value="OVERDUE">Overdue</option>
+        <option value="DUE_SOON">Due soon (≤3d)</option>
+        <option value="HAS_DDL">Has deadline</option>
+        <option value="NO_DDL">No deadline</option>
+      </select>
+      <select className={sel} value={filterDuration} onChange={(e) => setFilterDuration(e.target.value)}>
+        <option value="ALL">Any duration</option>
+        <option value="SHORT">Short (&lt;30m)</option>
+        <option value="MEDIUM">Medium (30–90m)</option>
+        <option value="LONG">Long (&gt;90m)</option>
+      </select>
+      {hasActiveFilters && (
+        <button
+          onClick={onClear}
+          className="text-xs text-slate-500 underline hover:text-slate-800"
+        >
+          Clear filters
+        </button>
+      )}
+    </div>
+  )
+}
+
 function SortBar({ sort, onSortClick }) {
   return (
     <div className="flex items-center gap-2">
@@ -371,6 +433,10 @@ export default function TasksPage() {
   const [newTaskType, setNewTaskType] = useState('ONE_TIME')
   const [filterText, setFilterText] = useState('')
   const [filterType, setFilterType] = useState('ALL')
+  const [filterPriority, setFilterPriority] = useState('ALL')
+  const [filterStatus, setFilterStatus] = useState('ALL')
+  const [filterDdl, setFilterDdl] = useState('ALL')
+  const [filterDuration, setFilterDuration] = useState('ALL')
 
   useEffect(() => {
     fetchTasks()
@@ -531,6 +597,29 @@ export default function TasksPage() {
     if (filterType !== 'ALL' && t.type !== filterType) return false
     if (filterText && !t.title.toLowerCase().includes(filterText.toLowerCase()))
       return false
+    if (filterPriority !== 'ALL' && t.priority !== filterPriority) return false
+    if (filterStatus === 'ACTIVE' && t.completed) return false
+    if (filterStatus === 'COMPLETED' && !t.completed) return false
+    if (filterDdl !== 'ALL') {
+      if (t.type !== 'ONE_TIME') return true
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      const in3 = new Date(today)
+      in3.setDate(in3.getDate() + 3)
+      const ddl = t.ddl ? new Date(t.ddl) : null
+      if (filterDdl === 'HAS_DDL' && !ddl) return false
+      if (filterDdl === 'NO_DDL' && ddl) return false
+      if (filterDdl === 'OVERDUE' && (!ddl || ddl >= today)) return false
+      if (filterDdl === 'DUE_SOON' && (!ddl || ddl < today || ddl >= in3))
+        return false
+    }
+    if (filterDuration !== 'ALL') {
+      const mins =
+        t.type === 'ONE_TIME' ? t.remainingMinutes ?? t.totalMinutes : t.totalMinutes
+      if (filterDuration === 'SHORT' && mins >= 30) return false
+      if (filterDuration === 'MEDIUM' && (mins < 30 || mins > 90)) return false
+      if (filterDuration === 'LONG' && mins <= 90) return false
+    }
     return true
   })
   const allSortedTasks = sortTasks(filteredTasks)
@@ -905,27 +994,39 @@ export default function TasksPage() {
       </Card>
 
       <div className="space-y-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Input
             placeholder="Filter by title..."
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
-            className="h-8 w-48 text-sm"
+            className="h-8 w-40 text-sm"
           />
-          {['ALL', 'ONE_TIME', 'RECURRING'].map((type) => (
-            <Button
-              key={type}
-              size="sm"
-              variant={filterType === type ? 'default' : 'outline'}
-              onClick={() => setFilterType(type)}
-            >
-              {type === 'ALL'
-                ? 'All'
-                : type === 'ONE_TIME'
-                  ? 'One-time'
-                  : 'Recurring'}
-            </Button>
-          ))}
+          <FilterBar
+            filterType={filterType}
+            setFilterType={setFilterType}
+            filterPriority={filterPriority}
+            setFilterPriority={setFilterPriority}
+            filterStatus={filterStatus}
+            setFilterStatus={setFilterStatus}
+            filterDdl={filterDdl}
+            setFilterDdl={setFilterDdl}
+            filterDuration={filterDuration}
+            setFilterDuration={setFilterDuration}
+            hasActiveFilters={
+              filterType !== 'ALL' ||
+              filterPriority !== 'ALL' ||
+              filterStatus !== 'ALL' ||
+              filterDdl !== 'ALL' ||
+              filterDuration !== 'ALL'
+            }
+            onClear={() => {
+              setFilterType('ALL')
+              setFilterPriority('ALL')
+              setFilterStatus('ALL')
+              setFilterDdl('ALL')
+              setFilterDuration('ALL')
+            }}
+          />
         </div>
         <div className="flex items-center justify-between">
           <SortBar sort={sort} onSortClick={handleSortClick} />
