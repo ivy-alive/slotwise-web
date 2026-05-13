@@ -323,6 +323,7 @@ export default function SchedulePage() {
               <Calendar
                 mode="single"
                 className="w-full"
+                weekStartsOn={1}
                 selected={date ? new Date(date + 'T00:00:00') : undefined}
                 modifiers={{
                   holiday: holidays,
