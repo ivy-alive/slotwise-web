@@ -881,10 +881,7 @@ export default function SchedulePage() {
                       </div>
                     ))
                   )}
-                  {!scheduleResult.closed &&
-                    scheduleResult.allocations.some(
-                      (a) => !a.done && !a.carriedOver,
-                    ) && (
+                  {!scheduleResult.closed && (
                       <div className="pt-2 border-t">
                         <Button
                           size="sm"
@@ -895,7 +892,9 @@ export default function SchedulePage() {
                         >
                           {callingItADay
                             ? 'Carrying over...'
-                            : `Call it a day · ${scheduleResult.allocations.filter((a) => a.done !== true).length} task(s) unfinished`}
+                            : scheduleResult.allocations.filter((a) => a.done !== true).length > 0
+                              ? `Call it a day · ${scheduleResult.allocations.filter((a) => a.done !== true).length} task(s) unfinished`
+                              : 'Call it a day'}
                         </Button>
                       </div>
                     )}
